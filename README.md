@@ -26,13 +26,36 @@ Abre [http://localhost:3000](http://localhost:3000).
 
 ## Instalable (Windows)
 
-Para generar el instalador de escritorio:
+### Desarrollo local
+
+Para generar el instalador de escritorio localmente:
 
 ```bash
 npm run build:app
 ```
 
 Los instaladores quedan en `dist/` (NSIS y portable).
+
+### Releases en GitHub
+
+Para crear una release con el instalable disponible para descargar:
+
+1. **Crear un tag de versión:**
+   ```bash
+   git tag v1.0.0
+   git push origin v1.0.0
+   ```
+
+2. **GitHub Actions automáticamente:**
+   - Construirá el instalable
+   - Creará un release con el tag
+   - Subirá el `.exe` como archivo descargable
+
+3. **Descargar desde GitHub:**
+   - Ve a [Releases](https://github.com/Matias-aburto/photo-printer/releases)
+   - Descarga el `.exe` de la versión que necesites
+
+**Nota:** El workflow también se puede ejecutar manualmente desde la pestaña "Actions" en GitHub.
 
 ## Añadir el tema shadcn desde TweakCN
 
