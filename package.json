@@ -1,17 +1,31 @@
 {
   "name": "photo-printer",
   "version": "0.1.0",
+  "description": "Grid de fotos para imprimir (PDF)",
+  "author": "",
   "private": true,
+  "main": "electron/main.js",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "start": "next start --hostname 0.0.0.0",
+    "lint": "eslint",
+    "electron": "electron .",
+    "build:app": "npm run build && electron-builder",
+    "pack:app": "npm run build && electron-builder --dir"
   },
   "dependencies": {
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-slot": "^1.2.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "heic2any": "^0.0.4",
+    "jspdf": "^4.1.0",
+    "lucide-react": "^0.564.0",
     "next": "16.1.6",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "tailwind-merge": "^3.4.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -22,6 +36,19 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.photo-printer.app",
+    "productName": "Photo Printer",
+    "directories": { "output": "dist" },
+    "files": ["out/**/*", "electron/**/*"],
+    "extraResources": [{ "from": "out", "to": "out" }],
+    "win": {
+      "target": ["nsis", "portable"],
+      "signAndEditExecutable": false
+    }
   }
 }
