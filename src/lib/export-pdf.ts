@@ -8,13 +8,9 @@ import type { SheetLayout, FlexibleLayout } from "./sheet-layout";
 import { getFlexibleCellRect } from "./sheet-layout";
 import type { GridCells, CellPhoto } from "@/types/photo-grid";
 import type { GridAppearance } from "@/types/grid-appearance";
+import type { CardTemplate } from "@/types/card-template";
+import type { Guide } from "@/types/guides";
 import { getPhotoEdit } from "@/types/photo-grid";
-
-export interface Guide {
-  id: string;
-  orientation: "horizontal" | "vertical";
-  positionMm: number;
-}
 
 const DPI = 300;
 const MM_PER_INCH = 25.4;
@@ -56,9 +52,30 @@ function drawCellBorder(
   doc.setLineDashPattern([], 0);
 }
 
+/** Bordes de plantilla (Grid Maker): sólido o discontinuo. */
+function drawTemplateBorder(
+  doc: import("jspdf").jsPDF,
+  xMm: number,
+  yMm: number,
+  wMm: number,
+  hMm: number,
+  border: { style: "solid" | "dashed"; widthMm: number }
+) {
+  doc.setLineWidth(border.widthMm);
+  doc.setDrawColor(0, 0, 0);
+  if (border.style === "dashed") {
+    doc.setLineDashPattern([border.widthMm * 2, border.widthMm * 1.5], 0);
+  } else {
+    doc.setLineDashPattern([], 0);
+  }
+  doc.rect(xMm, yMm, wMm, hMm, "S");
+  doc.setLineDashPattern([], 0);
+}
+
 /**
  * Dibuja la foto en un canvas con la misma lógica que la UI: contain (mantiene proporción y calidad, imagen completa dentro de la celda), luego pan/rotate/scale.
  * Aplica padding interno si está configurado.
+ * Si rotate90 es true (card en horizontal), dibuja la imagen rotada 90° CW para que se vea correcta.
  */
 function drawCellToCanvas(
   img: HTMLImageElement,
@@ -66,13 +83,21 @@ function drawCellToCanvas(
   cellWPx: number,
   cellHPx: number,
   borderRadiusPx: number,
-  cellPaddingPx: number = 0
+  cellPaddingPx: number = 0,
+  rotate90: boolean = false
 ): HTMLCanvasElement {
+  let drawW = cellWPx;
+  let drawH = cellHPx;
+  if (rotate90) {
+    drawW = cellHPx;
+    drawH = cellWPx;
+  }
+
   const iw = img.naturalWidth;
   const ih = img.naturalHeight;
   
-  const availableWPx = cellWPx - (cellPaddingPx * 2);
-  const availableHPx = cellHPx - (cellPaddingPx * 2);
+  const availableWPx = drawW - (cellPaddingPx * 2);
+  const availableHPx = drawH - (cellPaddingPx * 2);
   
   // contain: escala para que la imagen quepa entera manteniendo proporción (sin recortar)
   const containScale = Math.min(availableWPx / iw, availableHPx / ih);
@@ -96,14 +121,20 @@ function drawCellToCanvas(
 
   ctx.save();
 
+  if (rotate90) {
+    ctx.translate(cellWPx / 2, cellHPx / 2);
+    ctx.rotate(-90 * Math.PI / 180);
+    ctx.translate(-cellHPx / 2, -cellWPx / 2);
+  }
+
   // Aplicar clip con borderRadius si es necesario (esto define el área total de la celda)
   if (borderRadiusPx > 0) {
     ctx.beginPath();
-    const r = Math.min(borderRadiusPx, cellWPx / 2, cellHPx / 2);
+    const r = Math.min(borderRadiusPx, drawW / 2, drawH / 2);
     ctx.moveTo(r, 0);
-    ctx.arcTo(cellWPx, 0, cellWPx, r, r);
-    ctx.arcTo(cellWPx, cellHPx, cellWPx - r, cellHPx, r);
-    ctx.arcTo(0, cellHPx, 0, cellHPx - r, r);
+    ctx.arcTo(drawW, 0, drawW, r, r);
+    ctx.arcTo(drawW, drawH, drawW - r, drawH, r);
+    ctx.arcTo(0, drawH, 0, drawH - r, r);
     ctx.arcTo(0, 0, r, 0, r);
     ctx.closePath();
     ctx.clip();
@@ -153,7 +184,9 @@ export async function exportGridToPdf(
   appearance: GridAppearance,
   sheetCount: number = 1,
   guides: Guide[] = [],
-  flexibleLayout: FlexibleLayout | null = null
+  flexibleLayout: FlexibleLayout | null = null,
+  templateCardRects: { xMm: number; yMm: number; widthMm: number; heightMm: number; rotated?: boolean }[] | null = null,
+  cardTemplate: CardTemplate | null = null
 ): Promise<Blob> {
   const { jsPDF } = await import("jspdf");
 
@@ -208,17 +241,36 @@ export async function exportGridToPdf(
             console.warn("Cell", cellIndex, "image has no dimensions");
             continue;
           }
+          const rotate90 = !!(templateCardRects && templateCardRects[i]?.rotated);
           const canvas = drawCellToCanvas(
             img,
             photo,
             cellWPx,
             cellHPx,
             borderRadiusPx,
-            cellPaddingPx
+            cellPaddingPx,
+            rotate90
           );
           const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
           doc.addImage(dataUrl, "JPEG", x, y, cellW, cellH, undefined, "FAST");
-          drawCellBorder(doc, x, y, cellW, cellH, appearance);
+          if (templateCardRects && cardTemplate) {
+            if (cardTemplate.innerBorder?.enabled) {
+              drawTemplateBorder(doc, x, y, cellW, cellH, cardTemplate.innerBorder);
+            }
+            const cardRect = templateCardRects[i];
+            if (cardRect && cardTemplate.outerBorder?.enabled) {
+              drawTemplateBorder(
+                doc,
+                cardRect.xMm,
+                cardRect.yMm,
+                cardRect.widthMm,
+                cardRect.heightMm,
+                cardTemplate.outerBorder
+              );
+            }
+          } else {
+            drawCellBorder(doc, x, y, cellW, cellH, appearance);
+          }
         } catch (e) {
           console.warn("Cell", cellIndex, "image failed:", e);
         }

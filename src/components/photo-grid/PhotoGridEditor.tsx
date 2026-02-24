@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useState } from "react";
-import { cn } from "@/lib/utils";
+import { cn, formatDisplayNum } from "@/lib/utils";
 import {
   PAGE_PRESETS,
   getDefaultLayout,
@@ -21,6 +21,18 @@ import type { GridCells, CellPhoto } from "@/types/photo-grid";
 import { getPhotoEdit } from "@/types/photo-grid";
 import { fileToDisplayBlob, isHeic } from "@/lib/heic";
 import {
+  getAllTemplates,
+  getTemplateById,
+  saveTemplate,
+  getTemplateCellRects,
+  getTemplateCardRects,
+  getTemplateCellRectsFlexible,
+  getTemplateCardRectsFlexible,
+} from "@/lib/card-templates";
+import type { CardTemplate, PlaceholderRect } from "@/types/card-template";
+import type { Guide, GuideOrientation } from "@/types/guides";
+import { GridMakerPanel } from "./GridMakerPanel";
+import {
   DEFAULT_GRID_APPEARANCE,
   type GridAppearance,
   type GridBorderStyle,
@@ -36,16 +48,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AlertTriangle, Download, HelpCircle, ImagePlus, Loader2, Pencil, Trash2, Ruler, X, Save, Upload, Settings } from "lucide-react";
+import { AlertTriangle, Download, HelpCircle, ImagePlus, Layout, Loader2, Pencil, RotateCcw, RotateCw, Trash2, Ruler, X, Save, Upload, Settings } from "lucide-react";
 import { exportGridToPdf } from "@/lib/export-pdf";
-
-// Tipos para guías
-type GuideOrientation = "horizontal" | "vertical";
-interface Guide {
-  id: string;
-  orientation: GuideOrientation;
-  positionMm: number; // Posición en mm desde el borde superior (horizontal) o izquierdo (vertical)
-}
 
 // Configuración guardable (sin las imágenes)
 interface SavedConfig {
@@ -81,19 +85,19 @@ const STORAGE_KEY = "photo-grid-config";
 
 const UNITS: LengthUnit[] = ["mm", "cm", "in"];
 
+/** Factor mm → px para visualización en pantalla (96 DPI). */
+const MM_TO_PX_SCREEN = 96 / 25.4;
+
 function createEmptyCells(count: number): GridCells {
   return Array.from({ length: count }, () => null);
 }
 
 /**
- * Convierte mm a píxeles para visualización en pantalla.
- * Usa una conversión aproximada basada en 96 DPI (1mm ≈ 3.78px).
+ * Convierte mm a píxeles para visualización en pantalla (96 DPI).
  * Asegura un mínimo de 1px para que el borde sea visible.
  */
 function mmToPx(mm: number): number {
-  // 1mm = 3.779527559px a 96 DPI
-  const px = mm * 3.779527559;
-  return Math.max(1, px); // Mínimo 1px para visibilidad
+  return Math.max(1, mm * MM_TO_PX_SCREEN);
 }
 
 export type PageOrientation = "portrait" | "landscape";
@@ -207,13 +211,29 @@ export function PhotoGridEditor() {
   const [editingScaleInput, setEditingScaleInput] = useState<Record<number, string>>({});
   const [editingRotationInput, setEditingRotationInput] = useState<Record<number, string>>({});
   const libraryFileInputRef = React.useRef<HTMLInputElement | null>(null);
-  const [openPanel, setOpenPanel] = useState<"config" | "library" | null>(null);
+  const [openPanel, setOpenPanel] = useState<"config" | "library" | "gridmaker" | null>(null);
+  const [selectedCardTemplateId, setSelectedCardTemplateId] = useState<string | null>(null);
+  /** Plantilla que se está editando en el Grid Maker; la vista previa la muestra en vivo. */
+  const [editingTemplateFromGridMaker, setEditingTemplateFromGridMaker] = useState<CardTemplate | null>(null);
+  /** Actualizador de márgenes del placeholder: lo define el padre según editingTemplateFromGridMaker para que el arrastre siga funcionando aunque se cierre el panel. */
+  const placeholderUpdaterRef = React.useRef<((patch: Partial<PlaceholderRect>) => void) | null>(null);
+  /** Callback que registra el Grid Maker para salir del modo edición (limpiar su estado) desde el header. */
+  const exitTemplateEditRef = React.useRef<(() => void) | null>(null);
+  const placeholderDragRef = React.useRef<{
+    startX: number;
+    startY: number;
+    marginLeft: number;
+    marginRight: number;
+    marginTop: number;
+    marginBottom: number;
+    mmPerPx: number;
+  } | null>(null);
   const closePanelTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
   const isInteractingRef = React.useRef(false);
   const isLibraryDragActiveRef = React.useRef(false);
 
   // Funciones helper para manejar el hover del panel con delay
-  const handlePanelOpen = useCallback((panel: "config" | "library") => {
+  const handlePanelOpen = useCallback((panel: "config" | "library" | "gridmaker") => {
     if (closePanelTimeoutRef.current) {
       clearTimeout(closePanelTimeoutRef.current);
       closePanelTimeoutRef.current = null;
@@ -246,6 +266,73 @@ export function PhotoGridEditor() {
       closePanelTimeoutRef.current = null;
     }, 500); // Delay de 500ms antes de cerrar
   }, [draggedIndex]);
+
+  // El padre es dueño del actualizador de márgenes al arrastrar, así el arrastre sigue funcionando aunque se cierre el panel lateral
+  React.useEffect(() => {
+    if (editingTemplateFromGridMaker?.placeholders?.length) {
+      placeholderUpdaterRef.current = (patch: Partial<PlaceholderRect>) => {
+        setEditingTemplateFromGridMaker((prev) => {
+          if (!prev?.placeholders?.length) return prev;
+          return {
+            ...prev,
+            placeholders: [{ ...prev.placeholders[0], ...patch }],
+          };
+        });
+      };
+    } else {
+      placeholderUpdaterRef.current = null;
+    }
+    return () => {
+      placeholderUpdaterRef.current = null;
+    };
+  }, [editingTemplateFromGridMaker != null]); // solo al entrar/salir del modo edición; no en cada cambio de márgenes para no resetear el ref durante el arrastre
+
+  /** Arrastrar la zona de la foto en la vista previa cuando se está editando una plantilla en el Grid Maker. */
+  const handlePlaceholderDragStart = useCallback((e: React.MouseEvent, cardWidthMm: number, ph: PlaceholderRect) => {
+    if (!placeholderUpdaterRef.current) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const cardDiv = (e.currentTarget as HTMLElement).parentElement;
+    if (!cardDiv) return;
+    const cardWidthPx = cardDiv.getBoundingClientRect().width;
+    const mmPerPx = cardWidthMm / cardWidthPx;
+    placeholderDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      marginLeft: ph.marginLeftMm,
+      marginRight: ph.marginRightMm,
+      marginTop: ph.marginTopMm,
+      marginBottom: ph.marginBottomMm,
+      mmPerPx,
+    };
+    const onMove = (ev: MouseEvent) => {
+      const d = placeholderDragRef.current;
+      if (!d || !placeholderUpdaterRef.current) return;
+      const dxPx = ev.clientX - d.startX;
+      const dyPx = ev.clientY - d.startY;
+      const dxMm = dxPx * d.mmPerPx;
+      const dyMm = dyPx * d.mmPerPx;
+      const newLeft = d.marginLeft + dxMm;
+      const newRight = d.marginRight - dxMm;
+      const newTop = d.marginTop + dyMm;
+      const newBottom = d.marginBottom - dyMm;
+      if (newLeft >= 0 && newRight >= 0 && newTop >= 0 && newBottom >= 0) {
+        placeholderUpdaterRef.current({
+          marginLeftMm: newLeft,
+          marginRightMm: newRight,
+          marginTopMm: newTop,
+          marginBottomMm: newBottom,
+        });
+      }
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      placeholderDragRef.current = null;
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, []);
 
   const handlePanelCancelClose = useCallback(() => {
     if (closePanelTimeoutRef.current) {
@@ -675,6 +762,49 @@ export function PhotoGridEditor() {
     cellUnit,
   ]);
 
+  // Plantilla de Grid Maker activa: si se está editando una en el panel, la vista previa usa esa versión en vivo
+  const cardTemplate = selectedCardTemplateId ? getTemplateById(selectedCardTemplateId) : null;
+  const effectiveCardTemplate = editingTemplateFromGridMaker ?? cardTemplate;
+  const templateGapMm = effectiveCardTemplate?.gapMm ?? layout.gapMm;
+  const templateCellRects = useMemo((): CellRect[] | null => {
+    if (!effectiveCardTemplate) return null;
+    if (useFlexibleLayout) {
+      return getTemplateCellRectsFlexible(
+        effectiveCardTemplate,
+        layout.pageWidthMm,
+        layout.pageHeightMm,
+        layout.marginMm,
+        templateGapMm
+      );
+    }
+    return getTemplateCellRects(
+      effectiveCardTemplate,
+      layout.pageWidthMm,
+      layout.pageHeightMm,
+      layout.marginMm,
+      templateGapMm
+    );
+  }, [effectiveCardTemplate, useFlexibleLayout, layout.pageWidthMm, layout.pageHeightMm, layout.marginMm, templateGapMm]);
+  const templateCardRects = useMemo((): { xMm: number; yMm: number; widthMm: number; heightMm: number; rotated?: boolean }[] | null => {
+    if (!effectiveCardTemplate) return null;
+    if (useFlexibleLayout) {
+      return getTemplateCardRectsFlexible(
+        effectiveCardTemplate,
+        layout.pageWidthMm,
+        layout.pageHeightMm,
+        layout.marginMm,
+        templateGapMm
+      );
+    }
+    return getTemplateCardRects(
+      effectiveCardTemplate,
+      layout.pageWidthMm,
+      layout.pageHeightMm,
+      layout.marginMm,
+      templateGapMm
+    );
+  }, [effectiveCardTemplate, useFlexibleLayout, layout.pageWidthMm, layout.pageHeightMm, layout.marginMm, templateGapMm]);
+
   // Layout inteligente: empaqueta la mayor cantidad de fotos del tamaño indicado (algunas en horizontal, otras en vertical)
   const flexibleLayout = useMemo((): FlexibleLayout | null => {
     if (!useFlexibleLayout) return null;
@@ -710,16 +840,37 @@ export function PhotoGridEditor() {
     cellUnit,
   ]);
 
-  const cellsPerSheet = useFlexibleLayout && flexibleLayout
-    ? flexibleLayout.cellCount
-    : getCellCount(layout);
+  const cellsPerSheet =
+    (templateCellRects?.length != null && templateCellRects.length > 0)
+      ? templateCellRects.length
+      : useFlexibleLayout && flexibleLayout
+        ? flexibleLayout.cellCount
+        : getCellCount(layout);
   const cellCount = cellsPerSheet * sheetCount;
   const fitResult = useMemo(() => {
+    if (useFlexibleLayout && effectiveCardTemplate && templateCardRects && templateCellRects && templateCardRects.length > 0) {
+      const pseudoLayout: FlexibleLayout = {
+        pageWidthMm: layout.pageWidthMm,
+        pageHeightMm: layout.pageHeightMm,
+        marginMm: layout.marginMm,
+        gapMm: templateGapMm,
+        cellRects: templateCardRects.map((r, i) => ({
+          row: templateCellRects[i].row,
+          colInRow: templateCellRects[i].colInRow,
+          xMm: r.xMm,
+          yMm: r.yMm,
+          widthMm: r.widthMm,
+          heightMm: r.heightMm,
+        })),
+        cellCount: templateCardRects.length,
+      };
+      return checkFlexibleLayoutFits(pseudoLayout);
+    }
     if (useFlexibleLayout && flexibleLayout) {
       return checkFlexibleLayoutFits(flexibleLayout);
     }
     return checkLayoutFits(layout);
-  }, [useFlexibleLayout, flexibleLayout, layout]);
+  }, [useFlexibleLayout, flexibleLayout, layout, effectiveCardTemplate, templateCardRects, templateCellRects, templateGapMm]);
 
   const ensureCellsLength = useCallback(() => {
     setCells((prev) => {
@@ -736,12 +887,16 @@ export function PhotoGridEditor() {
 
   const getCellDimensionsMm = useCallback((cellIndex: number) => {
     const cellInSheet = cellIndex % cellsPerSheet;
+    if (templateCellRects && templateCellRects[cellInSheet]) {
+      const rect = templateCellRects[cellInSheet];
+      return { widthMm: rect.widthMm, heightMm: rect.heightMm };
+    }
     if (useFlexibleLayout && flexibleLayout) {
       const rect = getFlexibleCellRect(flexibleLayout, cellInSheet);
       if (rect) return { widthMm: rect.widthMm, heightMm: rect.heightMm };
     }
     return { widthMm: layout.cellWidthMm, heightMm: layout.cellHeightMm };
-  }, [cellsPerSheet, useFlexibleLayout, flexibleLayout, layout]);
+  }, [cellsPerSheet, templateCellRects, useFlexibleLayout, flexibleLayout, layout]);
 
   React.useEffect(() => ensureCellsLength(), [ensureCellsLength]);
 
@@ -1440,13 +1595,19 @@ export function PhotoGridEditor() {
   const exportPdf = async () => {
     setExporting(true);
     try {
+      const customLayout =
+        templateCellRects?.length
+          ? { pageWidthMm: layout.pageWidthMm, pageHeightMm: layout.pageHeightMm, marginMm: 0, gapMm: 0, cellRects: templateCellRects, cellCount: templateCellRects.length }
+          : useFlexibleLayout ? flexibleLayout : null;
       const blob = await exportGridToPdf(
         layout,
         cells,
         gridAppearance,
         sheetCount,
         showGuidesInExport ? guides : [],
-        useFlexibleLayout ? flexibleLayout : null
+        customLayout,
+        templateCellRects?.length && effectiveCardTemplate ? templateCardRects : null,
+        effectiveCardTemplate ?? null
       );
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
@@ -1458,7 +1619,16 @@ export function PhotoGridEditor() {
     }
   };
 
-  const renderCell = (index: number, cellWidthMm: number, cellHeightMm: number) => {
+  const renderCell = (
+    index: number,
+    cellWidthMm: number,
+    cellHeightMm: number,
+    options?: { disableBorders?: boolean; cellRotated?: boolean; hideActionButtons?: boolean }
+  ) => {
+    const isTemplateEditMode = editingTemplateFromGridMaker != null;
+    const disableBorders = options?.disableBorders ?? false;
+    const cellRotated = options?.cellRotated ?? false;
+    const hideActionButtons = options?.hideActionButtons ?? false;
     const photo = cells[index] ?? null;
     return (
       <div
@@ -1467,8 +1637,8 @@ export function PhotoGridEditor() {
         className={cn(
           "relative bg-muted/50 flex items-center justify-center",
           selectedCellIndex === index && "z-10",
-          !showBorders && "border-2 border-dashed overflow-hidden",
-          showBorders && "overflow-hidden",
+          !disableBorders && !showBorders && "border-2 border-dashed overflow-hidden",
+          !disableBorders && showBorders && "overflow-hidden",
           dropTarget === index && "border-primary bg-primary/10",
           draggedIndex === index && "opacity-50"
         )}
@@ -1477,7 +1647,7 @@ export function PhotoGridEditor() {
           minWidth: `${cellWidthMm}mm`,
           height: `${cellHeightMm}mm`,
           minHeight: `${cellHeightMm}mm`,
-          ...(showBorders
+          ...(!disableBorders && showBorders
             ? {
                 borderWidth: `${mmToPx(borderWidthMm)}px`,
                 borderStyle: borderStyle === "dotted" ? "dotted" : "solid",
@@ -1488,9 +1658,9 @@ export function PhotoGridEditor() {
               }
             : {}),
         }}
-        onDragOver={(e) => handleDragOver(index, e)}
-        onDragLeave={handleDragLeave}
-        onDrop={(e) => handleDrop(index, e)}
+        onDragOver={isTemplateEditMode ? undefined : (e) => handleDragOver(index, e)}
+        onDragLeave={isTemplateEditMode ? undefined : handleDragLeave}
+        onDrop={isTemplateEditMode ? undefined : (e) => handleDrop(index, e)}
       >
         {photo ? (
           <>
@@ -1563,7 +1733,10 @@ export function PhotoGridEditor() {
                   />
                 </div>
                 {selectedCellIndex === index && (
-                  <>
+                  <div
+                    className="absolute inset-0 pointer-events-none [&>*]:pointer-events-auto"
+                    style={cellRotated ? { transform: "rotate(-90deg)", transformOrigin: "center center" } : undefined}
+                  >
                     <div className="absolute left-0 top-0 size-3 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-primary bg-background cursor-nwse-resize shadow z-10" title="Redimensionar (esquina)" onMouseDown={(e) => handleResizeStart(index, e)} />
                     <div className="absolute right-0 top-0 size-3 translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-primary bg-background cursor-nesw-resize shadow z-10" title="Redimensionar (esquina)" onMouseDown={(e) => handleResizeStart(index, e)} />
                     <div className="absolute right-0 bottom-0 size-3 translate-x-1/2 translate-y-1/2 rounded-sm border-2 border-primary bg-background cursor-nwse-resize shadow z-10" title="Redimensionar (esquina)" onMouseDown={(e) => handleResizeStart(index, e)} />
@@ -1571,25 +1744,46 @@ export function PhotoGridEditor() {
                     <div className="absolute left-1/2 -top-7 size-6 -translate-x-1/2 rounded-full border-2 border-primary bg-background cursor-grab active:cursor-grabbing shadow z-10 flex items-center justify-center" title="Rotar (arrastrar)" onMouseDown={(e) => handleRotateStart(index, e)}>
                       <svg className="size-3.5 text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9h9" /></svg>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
-            <div className="absolute top-1 right-1 flex gap-1">
-              <Button type="button" size="icon" variant={selectedCellIndex === index ? "default" : "secondary"} className="size-7 opacity-90 hover:opacity-100" onClick={(e) => { e.stopPropagation(); setSelectedCellIndex((prev) => (prev === index ? null : index)); }} title={selectedCellIndex === index ? "Cerrar edición" : "Editar imagen"}>
-                <Pencil className="size-3.5" />
-              </Button>
-              <Button type="button" size="icon" variant="destructive" className="size-7 opacity-80 hover:opacity-100" onClick={(e) => { e.stopPropagation(); clearCell(index); }}>
-                <Trash2 className="size-4" />
-              </Button>
-            </div>
+            {!hideActionButtons && (
+              <div
+                className={cn(
+                  "absolute flex gap-1 z-10",
+                  cellRotated && "bottom-1 right-1",
+                  !cellRotated && !disableBorders && "top-1 right-1"
+                )}
+                style={
+                  cellRotated
+                    ? { transform: "rotate(-90deg)", transformOrigin: "bottom right" }
+                    : disableBorders
+                      ? { top: "2mm", right: "2mm" }
+                      : undefined
+                }
+              >
+                <Button type="button" size="icon" variant={selectedCellIndex === index ? "default" : "secondary"} className="size-7 opacity-90 hover:opacity-100" onClick={(e) => { e.stopPropagation(); setSelectedCellIndex((prev) => (prev === index ? null : index)); }} title={selectedCellIndex === index ? "Cerrar edición" : "Editar imagen"}>
+                  <Pencil className="size-3.5" />
+                </Button>
+                <Button type="button" size="icon" variant="destructive" className="size-7 opacity-80 hover:opacity-100" onClick={(e) => { e.stopPropagation(); clearCell(index); }}>
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
+            )}
           </>
         ) : (
-          <label className="flex flex-col items-center justify-center gap-0.5 cursor-pointer w-full h-full">
-            <input type="file" accept="image/*,.heic,.heif" className="sr-only" onChange={(e) => handleFileSelect(index, e.target.files)} />
-            <ImagePlus className="size-8 text-muted-foreground" />
-            <span className="text-[10px] text-muted-foreground">+</span>
-          </label>
+          isTemplateEditMode ? (
+            <div className="flex flex-col items-center justify-center gap-0.5 w-full h-full text-[10px] text-muted-foreground select-none pointer-events-none text-center">
+              Zona de foto (modo edición plantilla)
+            </div>
+          ) : (
+            <label className="flex flex-col items-center justify-center gap-0.5 cursor-pointer w-full h-full">
+              <input type="file" accept="image/*,.heic,.heif" className="sr-only" onChange={(e) => handleFileSelect(index, e.target.files)} />
+              <ImagePlus className="size-8 text-muted-foreground" />
+              <span className="text-[10px] text-muted-foreground">+</span>
+            </label>
+          )
         )}
       </div>
     );
@@ -1621,12 +1815,17 @@ export function PhotoGridEditor() {
               type="button"
               className={`group flex h-12 w-12 items-center justify-center rounded-lg hover:bg-primary/10 hover:text-primary transition-all duration-200 hover:scale-105 active:scale-95 ${openPanel === 'library' ? 'bg-primary/10 text-primary' : ''}`}
               title="Uploads / Biblioteca de fotos"
-              onMouseEnter={() => {
-                // Siempre abrir el panel al hacer hover, cerrando el anterior si existe
-                handlePanelOpen('library');
-              }}
+              onMouseEnter={() => handlePanelOpen('library')}
             >
               <ImagePlus className="h-5 w-5 transition-transform group-hover:scale-110" />
+            </button>
+            <button
+              type="button"
+              className={`group flex h-12 w-12 items-center justify-center rounded-lg hover:bg-primary/10 hover:text-primary transition-all duration-200 hover:scale-105 active:scale-95 ${openPanel === 'gridmaker' ? 'bg-primary/10 text-primary' : ''}`}
+              title="Grid Maker — diseñar plantilla de celda"
+              onMouseEnter={() => handlePanelOpen('gridmaker')}
+            >
+              <Layout className="h-5 w-5 transition-transform group-hover:scale-110" />
             </button>
           </div>
         </aside>
@@ -1687,6 +1886,39 @@ export function PhotoGridEditor() {
                 onFocus={handlePanelInteractionStart}
                 onBlur={handlePanelInteractionEnd}
               >
+                {/* Formato de celda: plantillas incluidas + las que crees en Grid Maker */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-medium text-muted-foreground">Formato de celda</h3>
+                  <div className="space-y-2">
+                    <Label>Plantilla</Label>
+                    <Select
+                      value={selectedCardTemplateId || "none"}
+                      onValueChange={(v) => {
+                        if (v === "none") {
+                          setSelectedCardTemplateId(null);
+                        } else {
+                          setSelectedCardTemplateId(v);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Selecciona formato" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Ninguno (grid normal)</SelectItem>
+                        {getAllTemplates().map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Las plantillas propias se crean en Grid Maker (icono de cuadrícula).
+                    </p>
+                  </div>
+                </div>
+
                 {/* Inicio rápido: solo lo esencial */}
                 <div className="space-y-4">
                   <h3 className="text-sm font-medium text-muted-foreground">Inicio rápido</h3>
@@ -1756,7 +1988,7 @@ export function PhotoGridEditor() {
                             type="number"
                             min={1}
                             max={20}
-                            value={rows}
+                            value={formatDisplayNum(rows)}
                             onChange={(e) => setRows(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
                             className="w-full"
                           />
@@ -1767,7 +1999,7 @@ export function PhotoGridEditor() {
                             type="number"
                             min={1}
                             max={20}
-                            value={cols}
+                            value={formatDisplayNum(cols)}
                             onChange={(e) => setCols(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
                             className="w-full"
                           />
@@ -1793,7 +2025,7 @@ export function PhotoGridEditor() {
                         type="number"
                         min={1}
                         step={0.1}
-                        value={customPageWidth}
+                        value={formatDisplayNum(customPageWidth)}
                         onChange={(e) => setCustomPageWidth(Number(e.target.value) || 0)}
                         className="flex-1"
                       />
@@ -1821,7 +2053,7 @@ export function PhotoGridEditor() {
                         type="number"
                         min={1}
                         step={0.1}
-                        value={customPageHeight}
+                        value={formatDisplayNum(customPageHeight)}
                         onChange={(e) => setCustomPageHeight(Number(e.target.value) || 0)}
                         className="flex-1"
                       />
@@ -1839,7 +2071,7 @@ export function PhotoGridEditor() {
                     type="number"
                     min={0}
                     step={0.5}
-                    value={marginValue}
+                    value={formatDisplayNum(marginValue)}
                     onChange={(e) => setMarginValue(Number(e.target.value) || 0)}
                     className="flex-1"
                   />
@@ -1860,135 +2092,25 @@ export function PhotoGridEditor() {
                   </Select>
                 </div>
               </div>
-            </div>
-                </details>
 
-                {/* Opciones del grid (colapsable) */}
-                <details className="group rounded-lg border border-border bg-muted/10">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium text-sm hover:bg-muted/20 [&::-webkit-details-marker]:hidden">
-              <span className="transition group-open:rotate-90">▶</span>
-              Opciones del grid
-            </summary>
-            <div className="border-t border-border px-4 py-4 space-y-4">
-              <div className="space-y-4">
-                <div className="space-y-2">
-                  <Label>Número de hojas</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={50}
-                    value={sheetCount}
-                    onChange={(e) =>
-                      setSheetCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))
-                    }
-                    className="w-full"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Ancho celda</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="number"
-                      min={0.1}
-                      step={0.1}
-                      value={cellWidthValue}
-                      onChange={(e) => setCellWidthValue(Number(e.target.value) || 0)}
-                      className="flex-1"
-                    />
-                    <Select
-                      value={cellUnit}
-                      onValueChange={(v) => setCellUnit(v as LengthUnit)}
-                    >
-                      <SelectTrigger className="w-24">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {UNITS.map((u) => (
-                          <SelectItem key={u} value={u}>
-                            {UNIT_LABELS[u]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Alto celda</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="number"
-                      min={0.1}
-                      step={0.1}
-                      value={cellHeightValue}
-                      onChange={(e) => setCellHeightValue(Number(e.target.value) || 0)}
-                      className="flex-1"
-                    />
-                    <span className="flex items-center text-sm text-muted-foreground px-3">
-                      {UNIT_LABELS[cellUnit]}
-                    </span>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Espacio entre celdas</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="number"
-                      min={0}
-                      step={0.5}
-                      value={gapValue}
-                      onChange={(e) => setGapValue(Number(e.target.value) || 0)}
-                      className="flex-1"
-                    />
-                    <Select
-                      value={gapUnit}
-                      onValueChange={(v) => setGapUnit(v as LengthUnit)}
-                    >
-                      <SelectTrigger className="w-24">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {UNITS.map((u) => (
-                          <SelectItem key={u} value={u}>
-                            {UNIT_LABELS[u]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Padding interno (borde ↔ foto)</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      type="number"
-                      min={0}
-                      step={0.5}
-                      value={cellPaddingValue}
-                      onChange={(e) => setCellPaddingValue(Number(e.target.value) || 0)}
-                      className="flex-1"
-                    />
-                    <Select
-                      value={cellPaddingUnit}
-                      onValueChange={(v) => setCellPaddingUnit(v as LengthUnit)}
-                    >
-                      <SelectTrigger className="w-24">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {UNITS.map((u) => (
-                          <SelectItem key={u} value={u}>
-                            {UNIT_LABELS[u]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
+              <div className="space-y-2">
+                <Label>Número de hojas</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={formatDisplayNum(sheetCount)}
+                  onChange={(e) =>
+                    setSheetCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))
+                  }
+                  className="w-full"
+                />
               </div>
             </div>
                 </details>
 
-                {/* Bordes y apariencia (colapsable) */}
+                {/* Bordes y apariencia: solo cuando no hay plantilla (con plantilla los bordes se definen en el Grid Maker) */}
+                {!selectedCardTemplateId && (
                 <details className="group rounded-lg border border-border bg-muted/10">
             <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium text-sm hover:bg-muted/20 [&::-webkit-details-marker]:hidden">
               <span className="transition group-open:rotate-90">▶</span>
@@ -2030,7 +2152,7 @@ export function PhotoGridEditor() {
                       type="number"
                       min={0.1}
                       step={0.1}
-                      value={borderWidthMm}
+                      value={formatDisplayNum(borderWidthMm)}
                       onChange={(e) =>
                         setBorderWidthMm(Math.max(0.1, Number(e.target.value) || 0.1))
                       }
@@ -2043,7 +2165,7 @@ export function PhotoGridEditor() {
                       type="number"
                       min={0}
                       step={0.5}
-                      value={borderRadiusMm}
+                      value={formatDisplayNum(borderRadiusMm)}
                       onChange={(e) =>
                         setBorderRadiusMm(Math.max(0, Number(e.target.value) || 0))
                       }
@@ -2054,6 +2176,7 @@ export function PhotoGridEditor() {
               )}
             </div>
                 </details>
+                )}
 
                 {/* Reglas y guías (colapsable) */}
                 <details className="group rounded-lg border border-border bg-muted/10">
@@ -2137,6 +2260,28 @@ export function PhotoGridEditor() {
         )}
 
         {/* Panel flotante de biblioteca */}
+        {openPanel === "gridmaker" && (
+          <div
+            className="absolute left-16 top-0 bottom-0 w-96 border-r bg-background shadow-2xl z-20 flex flex-col animate-in slide-in-from-left-2 duration-200 overflow-y-auto"
+            onMouseEnter={handlePanelCancelClose}
+            onMouseLeave={handlePanelClose}
+          >
+            <GridMakerPanel
+              selectedTemplateId={selectedCardTemplateId}
+              onSelectTemplate={setSelectedCardTemplateId}
+              onEditingTemplateChange={setEditingTemplateFromGridMaker}
+              onRegisterExitEdit={(fn) => {
+                exitTemplateEditRef.current = fn;
+              }}
+              initialEditingTemplate={editingTemplateFromGridMaker}
+              sheetLayout={{
+                pageWidthMm: layout.pageWidthMm,
+                pageHeightMm: layout.pageHeightMm,
+                marginMm: layout.marginMm,
+              }}
+            />
+          </div>
+        )}
         {openPanel === 'library' && (
           <div
             className="absolute left-16 top-0 bottom-0 w-72 border-r bg-background shadow-2xl z-20 flex flex-col animate-in slide-in-from-left-2 duration-200"
@@ -2269,19 +2414,50 @@ export function PhotoGridEditor() {
         <Card className="flex-1 flex flex-col overflow-hidden m-0 rounded-none border-0">
           <CardHeader className="shrink-0 border-b flex flex-row items-center justify-between gap-4">
             <CardTitle className="text-lg">Vista previa (hoja a tamaño real)</CardTitle>
-            <Button
-              type="button"
-              onClick={exportPdf}
-              disabled={exporting || !fitResult.fits || !cells.some(Boolean)}
-              className="gap-2 shrink-0"
-            >
-              {exporting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="h-4 w-4" />
-              )}
-              {exporting ? "Exportando…" : "Exportar PDF"}
-            </Button>
+            {editingTemplateFromGridMaker != null ? (
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-sm text-muted-foreground hidden sm:inline">Editando plantilla</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setEditingTemplateFromGridMaker(null);
+                    placeholderUpdaterRef.current = null;
+                    exitTemplateEditRef.current?.();
+                  }}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => {
+                    if (editingTemplateFromGridMaker) {
+                      saveTemplate(editingTemplateFromGridMaker);
+                      setSelectedCardTemplateId(editingTemplateFromGridMaker.id);
+                    }
+                    setEditingTemplateFromGridMaker(null);
+                    placeholderUpdaterRef.current = null;
+                    exitTemplateEditRef.current?.();
+                  }}
+                >
+                  Aceptar
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                onClick={exportPdf}
+                disabled={exporting || !fitResult.fits || !cells.some(Boolean)}
+                className="gap-2 shrink-0"
+              >
+                {exporting ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="h-4 w-4" />
+                )}
+                {exporting ? "Exportando…" : "Exportar PDF"}
+              </Button>
+            )}
           </CardHeader>
         <CardContent className="flex-1 overflow-auto bg-muted/30 p-4 flex justify-center items-start">
           <div className="flex flex-col items-center gap-8 relative">
@@ -2425,29 +2601,130 @@ export function PhotoGridEditor() {
                     );
                   })}
                   <div
-                    className="flex-1 flex flex-col overflow-auto"
+                    className={cn(
+                      "flex flex-col overflow-auto",
+                      (templateCellRects?.length || (useFlexibleLayout && flexibleLayout)) ? "flex-none" : "flex-1"
+                    )}
                     style={{
-                      padding: `${layout.marginMm}mm`,
+                      padding: (templateCellRects?.length || (useFlexibleLayout && flexibleLayout)) ? 0 : `${layout.marginMm}mm`,
+                      position: (templateCellRects?.length || (useFlexibleLayout && flexibleLayout)) ? "relative" : undefined,
+                      width: (templateCellRects?.length || (useFlexibleLayout && flexibleLayout)) ? `${layout.pageWidthMm}mm` : undefined,
+                      height: (templateCellRects?.length || (useFlexibleLayout && flexibleLayout)) ? `${layout.pageHeightMm}mm` : undefined,
                     }}
                   >
-                    {useFlexibleLayout && flexibleLayout ? (
-                      <div className="flex flex-col overflow-hidden" style={{ gap: `${layout.gapMm}mm` }}>
-                        {(() => {
-                          const byRow = new Map<number, { index: number; rect: CellRect }[]>();
-                          flexibleLayout.cellRects.forEach((rect, i) => {
-                            if (!byRow.has(rect.row)) byRow.set(rect.row, []);
-                            byRow.get(rect.row)!.push({ index: i, rect });
-                          });
-                          return Array.from(byRow.keys()).sort((a, b) => a - b).map((rowKey) => (
-                            <div key={rowKey} className="flex overflow-hidden" style={{ gap: `${layout.gapMm}mm` }}>
-                              {byRow.get(rowKey)!.map(({ index: cellInSheet, rect }) => {
-                                const index = sheetIndex * cellsPerSheet + cellInSheet;
-                                return renderCell(index, rect.widthMm, rect.heightMm);
-                              })}
+                    {templateCellRects && templateCellRects.length > 0 && templateCardRects && effectiveCardTemplate ? (
+                      <>
+                        {templateCardRects.map((cardRect, cellInSheet) => {
+                          const index = sheetIndex * cellsPerSheet + cellInSheet;
+                          const rect = templateCellRects[cellInSheet];
+                          const rawPh = effectiveCardTemplate.placeholders[0];
+                          if (!rect || !rawPh) return null;
+                          const outerB = effectiveCardTemplate.outerBorder;
+                          const innerB = effectiveCardTemplate.innerBorder;
+                          const borderColor = "hsl(0, 0%, 25%)";
+                          const isEditingTemplate = editingTemplateFromGridMaker != null;
+                          const imgLeftMm = rect.xMm - cardRect.xMm;
+                          const imgTopMm = rect.yMm - cardRect.yMm;
+                          const isRotated = !!cardRect.rotated;
+                          return (
+                            <div
+                              key={cellInSheet}
+                              data-template-card
+                              className="absolute box-border bg-white"
+                              style={{
+                                left: `${cardRect.xMm}mm`,
+                                top: `${cardRect.yMm}mm`,
+                                width: `${cardRect.widthMm}mm`,
+                                height: `${cardRect.heightMm}mm`,
+                                ...(outerB?.enabled
+                                  ? {
+                                      border: `${mmToPx(outerB.widthMm)}px ${outerB.style === "dashed" ? "dashed" : "solid"} ${borderColor}`,
+                                    }
+                                  : { border: "1px solid hsl(var(--muted-foreground) / 0.4)" }),
+                              }}
+                            >
+                              <div
+                                className={cn(
+                                  "absolute overflow-hidden box-border",
+                                  isEditingTemplate && "cursor-move"
+                                )}
+                                style={{
+                                  left: `${imgLeftMm}mm`,
+                                  top: `${imgTopMm}mm`,
+                                  width: `${rect.widthMm}mm`,
+                                  height: `${rect.heightMm}mm`,
+                                  ...(innerB?.enabled
+                                    ? {
+                                        border: `${mmToPx(innerB.widthMm)}px ${innerB.style === "dashed" ? "dashed" : "solid"} ${borderColor}`,
+                                      }
+                                    : {}),
+                                }}
+                                {...(isEditingTemplate && !isRotated
+                                  ? {
+                                      title: "Arrastra para mover la zona de la foto",
+                                      onMouseDown: (e: React.MouseEvent) =>
+                                        handlePlaceholderDragStart(e, cardRect.widthMm, rawPh),
+                                    }
+                                  : {})}
+                              >
+                                {isRotated && cells[index] ? (
+                                  <div
+                                    className="absolute overflow-hidden"
+                                    style={{
+                                      width: `${rect.heightMm}mm`,
+                                      height: `${rect.widthMm}mm`,
+                                      left: `${(rect.widthMm - rect.heightMm) / 2}mm`,
+                                      top: `${(rect.heightMm - rect.widthMm) / 2}mm`,
+                                      transform: "rotate(-90deg)",
+                                      transformOrigin: "center center",
+                                    }}
+                                  >
+                                    {renderCell(index, rect.heightMm, rect.widthMm, { disableBorders: true, cellRotated: true, hideActionButtons: true })}
+                                  </div>
+                                ) : (
+                                  renderCell(index, rect.widthMm, rect.heightMm, { disableBorders: true })
+                                )}
+                              </div>
+                              {isRotated && cells[index] && (
+                                <div
+                                  className="absolute flex gap-1 z-20"
+                                  style={{
+                                    top: `${imgTopMm + 2}mm`,
+                                    right: `${cardRect.widthMm - imgLeftMm - rect.widthMm + 2}mm`,
+                                  }}
+                                >
+                                  <Button type="button" size="icon" variant={selectedCellIndex === index ? "default" : "secondary"} className="size-7 opacity-90 hover:opacity-100" onClick={(e) => { e.stopPropagation(); setSelectedCellIndex((prev) => (prev === index ? null : index)); }} title={selectedCellIndex === index ? "Cerrar edición" : "Editar imagen"}>
+                                    <Pencil className="size-3.5" />
+                                  </Button>
+                                  <Button type="button" size="icon" variant="destructive" className="size-7 opacity-80 hover:opacity-100" onClick={(e) => { e.stopPropagation(); clearCell(index); }}>
+                                    <Trash2 className="size-4" />
+                                  </Button>
+                                </div>
+                              )}
                             </div>
-                          ));
-                        })()}
-                      </div>
+                          );
+                        })}
+                      </>
+                    ) : useFlexibleLayout && flexibleLayout ? (
+                      <>
+                        {flexibleLayout.cellRects.map((rect, cellInSheet) => {
+                          const index = sheetIndex * cellsPerSheet + cellInSheet;
+                          return (
+                            <div
+                              key={cellInSheet}
+                              className="absolute overflow-hidden"
+                              style={{
+                                left: `${rect.xMm}mm`,
+                                top: `${rect.yMm}mm`,
+                                width: `${rect.widthMm}mm`,
+                                height: `${rect.heightMm}mm`,
+                              }}
+                            >
+                              {renderCell(index, rect.widthMm, rect.heightMm)}
+                            </div>
+                          );
+                        })}
+                      </>
                     ) : (
                       <div
                         className="grid overflow-hidden"
@@ -2516,7 +2793,7 @@ export function PhotoGridEditor() {
                   max={200}
                   step={1}
                   className="w-16 h-8 text-sm text-center"
-                  value={editingScaleInput[selectedCellIndex] ?? String(Math.round(getPhotoEdit(cells[selectedCellIndex]!).scale * 100))}
+                  value={editingScaleInput[selectedCellIndex] ?? formatDisplayNum(Math.round(getPhotoEdit(cells[selectedCellIndex]!).scale * 100))}
                   onFocus={() => setEditingScaleInput((p) => ({ ...p, [selectedCellIndex]: String(Math.round(getPhotoEdit(cells[selectedCellIndex]!).scale * 100)) }))}
                   onChange={(e) => setEditingScaleInput((p) => ({ ...p, [selectedCellIndex]: e.target.value }))}
                   onKeyDown={(e) => {
@@ -2548,6 +2825,38 @@ export function PhotoGridEditor() {
           {/* Controles de Rotación */}
           <div className="flex items-center gap-3">
             <Label className="text-sm font-medium whitespace-nowrap">Rotación</Label>
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              className="size-9 shrink-0"
+              title="Rotar 90° en sentido antihorario"
+              onClick={() => {
+                const current = getPhotoEdit(cells[selectedCellIndex]!).rotation;
+                let next = current - 90;
+                if (next < -180) next += 360;
+                updatePhotoEdit(selectedCellIndex, { rotation: next });
+                setEditingRotationInput((p) => ({ ...p, [selectedCellIndex]: String(next) }));
+              }}
+            >
+              <RotateCcw className="size-4" />
+            </Button>
+            <Button
+              type="button"
+              size="icon"
+              variant="outline"
+              className="size-9 shrink-0"
+              title="Rotar 90° en sentido horario"
+              onClick={() => {
+                const current = getPhotoEdit(cells[selectedCellIndex]!).rotation;
+                let next = current + 90;
+                if (next > 180) next -= 360;
+                updatePhotoEdit(selectedCellIndex, { rotation: next });
+                setEditingRotationInput((p) => ({ ...p, [selectedCellIndex]: String(next) }));
+              }}
+            >
+              <RotateCw className="size-4" />
+            </Button>
             <div className="flex items-center gap-2">
               <input
                 type="range"
@@ -2568,7 +2877,7 @@ export function PhotoGridEditor() {
                   max={180}
                   step={0.5}
                   className="w-16 h-8 text-sm text-center"
-                  value={editingRotationInput[selectedCellIndex] ?? String(getPhotoEdit(cells[selectedCellIndex]!).rotation)}
+                  value={editingRotationInput[selectedCellIndex] ?? formatDisplayNum(getPhotoEdit(cells[selectedCellIndex]!).rotation)}
                   onFocus={() => setEditingRotationInput((p) => ({ ...p, [selectedCellIndex]: String(getPhotoEdit(cells[selectedCellIndex]!).rotation) }))}
                   onChange={(e) => setEditingRotationInput((p) => ({ ...p, [selectedCellIndex]: e.target.value }))}
                   onKeyDown={(e) => {
