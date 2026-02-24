@@ -3,6 +3,11 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { cn, formatDisplayNum } from "@/lib/utils";
 import {
+  DEFAULT_GRID_APPEARANCE,
+  type GridAppearance,
+  type GridBorderStyle,
+} from "@/types/grid-appearance";
+import {
   PAGE_PRESETS,
   getDefaultLayout,
   getCellCount,
@@ -33,11 +38,6 @@ import type { CardTemplate, PlaceholderRect } from "@/types/card-template";
 import type { Guide, GuideOrientation } from "@/types/guides";
 import { GridMakerPanel } from "./GridMakerPanel";
 import {
-  DEFAULT_GRID_APPEARANCE,
-  type GridAppearance,
-  type GridBorderStyle,
-} from "@/types/grid-appearance";
-import {
   Select,
   SelectContent,
   SelectItem,
@@ -48,40 +48,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AlertTriangle, Download, HelpCircle, ImagePlus, Layout, Loader2, Pencil, RotateCcw, RotateCw, Trash2, Ruler, X, Save, Upload, Settings } from "lucide-react";
+import { AlertTriangle, Download, HelpCircle, ImagePlus, Layout, Loader2, Pencil, RotateCcw, RotateCw, Trash2, Ruler, X, Settings } from "lucide-react";
 import { exportGridToPdf } from "@/lib/export-pdf";
-
-// Configuración guardable (sin las imágenes)
-interface SavedConfig {
-  pagePreset: PagePresetId;
-  pageOrientation: PageOrientation;
-  customPageWidth: number;
-  customPageHeight: number;
-  customPageUnit: LengthUnit;
-  marginValue: number;
-  marginUnit: LengthUnit;
-  useFlexibleLayout: boolean;
-  cellsPerRowString: string;
-  rows: number;
-  cols: number;
-  sheetCount: number;
-  cellWidthValue: number;
-  cellHeightValue: number;
-  cellUnit: LengthUnit;
-  gapValue: number;
-  gapUnit: LengthUnit;
-  cellPaddingValue: number;
-  cellPaddingUnit: LengthUnit;
-  showBorders: boolean;
-  borderStyle: GridBorderStyle;
-  borderWidthMm: number;
-  borderRadiusMm: number;
-  showRulers: boolean;
-  showGuidesInExport: boolean;
-  guides: Guide[];
-}
-
-const STORAGE_KEY = "photo-grid-config";
 
 const UNITS: LengthUnit[] = ["mm", "cm", "in"];
 
@@ -126,26 +94,6 @@ function getPageSizeMm(
 
 export function PhotoGridEditor() {
   const defaultLayout = useMemo(() => getDefaultLayout(), []);
-
-  // Funciones helper para guardar/cargar (sin dependencias de estado)
-  const saveConfigToStorage = useCallback((config: Partial<SavedConfig>) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-    } catch (e) {
-      console.warn("No se pudo guardar la configuración:", e);
-    }
-  }, []);
-
-  const loadConfigFromStorage = useCallback((): Partial<SavedConfig> | null => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (!saved) return null;
-      return JSON.parse(saved) as Partial<SavedConfig>;
-    } catch (e) {
-      console.warn("No se pudo cargar la configuración:", e);
-      return null;
-    }
-  }, []);
 
   const [pagePreset, setPagePreset] = useState<PagePresetId>("a4");
   const [pageOrientation, setPageOrientation] = useState<PageOrientation>("portrait");
@@ -507,224 +455,6 @@ export function PhotoGridEditor() {
   const [guides, setGuides] = useState<Guide[]>([]);
   const [showGuidesInExport, setShowGuidesInExport] = useState(false);
   const [draggingGuide, setDraggingGuide] = useState<{ id: string; orientation: GuideOrientation } | null>(null);
-  const isInitialLoadRef = React.useRef(true);
-
-  // Cargar configuración al inicio (solo una vez)
-  React.useEffect(() => {
-    if (!isInitialLoadRef.current) return;
-    isInitialLoadRef.current = false;
-    
-    const saved = loadConfigFromStorage();
-    if (!saved) return;
-    
-    if (saved.pagePreset !== undefined) setPagePreset(saved.pagePreset);
-    if (saved.pageOrientation !== undefined) setPageOrientation(saved.pageOrientation);
-    if (saved.customPageWidth !== undefined) setCustomPageWidth(saved.customPageWidth);
-    if (saved.customPageHeight !== undefined) setCustomPageHeight(saved.customPageHeight);
-    if (saved.customPageUnit !== undefined) setCustomPageUnit(saved.customPageUnit);
-    if (saved.marginValue !== undefined) setMarginValue(saved.marginValue);
-    if (saved.marginUnit !== undefined) setMarginUnit(saved.marginUnit);
-    if (saved.useFlexibleLayout !== undefined) setUseFlexibleLayout(saved.useFlexibleLayout);
-    if (saved.cellsPerRowString !== undefined) setCellsPerRowString(saved.cellsPerRowString);
-    if (saved.rows !== undefined) setRows(saved.rows);
-    if (saved.cols !== undefined) setCols(saved.cols);
-    if (saved.sheetCount !== undefined) setSheetCount(saved.sheetCount);
-    if (saved.cellWidthValue !== undefined) setCellWidthValue(saved.cellWidthValue);
-    if (saved.cellHeightValue !== undefined) setCellHeightValue(saved.cellHeightValue);
-    if (saved.cellUnit !== undefined) setCellUnit(saved.cellUnit);
-    if (saved.gapValue !== undefined) setGapValue(saved.gapValue);
-    if (saved.gapUnit !== undefined) setGapUnit(saved.gapUnit);
-    if (saved.cellPaddingValue !== undefined) setCellPaddingValue(saved.cellPaddingValue);
-    if (saved.cellPaddingUnit !== undefined) setCellPaddingUnit(saved.cellPaddingUnit);
-    if (saved.showBorders !== undefined) setShowBorders(saved.showBorders);
-    if (saved.borderStyle !== undefined) setBorderStyle(saved.borderStyle);
-    if (saved.borderWidthMm !== undefined) setBorderWidthMm(saved.borderWidthMm);
-    if (saved.borderRadiusMm !== undefined) setBorderRadiusMm(saved.borderRadiusMm);
-    if (saved.showRulers !== undefined) setShowRulers(saved.showRulers);
-    if (saved.showGuidesInExport !== undefined) setShowGuidesInExport(saved.showGuidesInExport);
-    if (saved.guides !== undefined) setGuides(saved.guides);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Solo ejecutar una vez al montar
-
-  // Guardar configuración automáticamente cuando cambie (con debounce)
-  React.useEffect(() => {
-    // No guardar durante la carga inicial
-    if (isInitialLoadRef.current) return;
-    
-    const timeoutId = setTimeout(() => {
-      const config: SavedConfig = {
-        pagePreset,
-        pageOrientation,
-        customPageWidth,
-        customPageHeight,
-        customPageUnit,
-        marginValue,
-        marginUnit,
-        useFlexibleLayout,
-        cellsPerRowString,
-        rows,
-        cols,
-        sheetCount,
-        cellWidthValue,
-        cellHeightValue,
-        cellUnit,
-        gapValue,
-        gapUnit,
-        cellPaddingValue,
-        cellPaddingUnit,
-        showBorders,
-        borderStyle,
-        borderWidthMm,
-        borderRadiusMm,
-        showRulers,
-        showGuidesInExport,
-        guides,
-      };
-      saveConfigToStorage(config);
-    }, 500); // Debounce de 500ms
-
-    return () => clearTimeout(timeoutId);
-  }, [
-    pagePreset,
-    pageOrientation,
-    customPageWidth,
-    customPageHeight,
-    customPageUnit,
-    marginValue,
-    marginUnit,
-    useFlexibleLayout,
-    cellsPerRowString,
-    rows,
-    cols,
-    sheetCount,
-    cellWidthValue,
-    cellHeightValue,
-    cellUnit,
-    gapValue,
-    gapUnit,
-    cellPaddingValue,
-    cellPaddingUnit,
-    showBorders,
-    borderStyle,
-    borderWidthMm,
-    borderRadiusMm,
-    showRulers,
-    showGuidesInExport,
-    guides,
-    saveConfigToStorage,
-  ]);
-
-  // Funciones para exportar/importar configuración (después de declarar todos los estados)
-  const exportConfig = useCallback(() => {
-    const config: SavedConfig = {
-      pagePreset,
-      pageOrientation,
-      customPageWidth,
-      customPageHeight,
-      customPageUnit,
-      marginValue,
-      marginUnit,
-      useFlexibleLayout,
-      cellsPerRowString,
-      rows,
-      cols,
-      sheetCount,
-      cellWidthValue,
-      cellHeightValue,
-      cellUnit,
-      gapValue,
-      gapUnit,
-      cellPaddingValue,
-      cellPaddingUnit,
-      showBorders,
-      borderStyle,
-      borderWidthMm,
-      borderRadiusMm,
-      showRulers,
-      showGuidesInExport,
-      guides,
-    };
-    const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `photo-grid-config-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [
-    pagePreset,
-    pageOrientation,
-    customPageWidth,
-    customPageHeight,
-    customPageUnit,
-    marginValue,
-    marginUnit,
-    rows,
-    cols,
-    sheetCount,
-    cellWidthValue,
-    cellHeightValue,
-    cellUnit,
-    gapValue,
-    gapUnit,
-    cellPaddingValue,
-    cellPaddingUnit,
-    showBorders,
-    borderStyle,
-    borderWidthMm,
-    borderRadiusMm,
-    showRulers,
-    showGuidesInExport,
-    guides,
-  ]);
-
-  const importConfig = useCallback(() => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "application/json";
-    input.onchange = (e) => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        try {
-          const config = JSON.parse(event.target?.result as string) as Partial<SavedConfig>;
-          // Aplicar la configuración cargada
-          if (config.pagePreset !== undefined) setPagePreset(config.pagePreset);
-          if (config.pageOrientation !== undefined) setPageOrientation(config.pageOrientation);
-          if (config.customPageWidth !== undefined) setCustomPageWidth(config.customPageWidth);
-          if (config.customPageHeight !== undefined) setCustomPageHeight(config.customPageHeight);
-          if (config.customPageUnit !== undefined) setCustomPageUnit(config.customPageUnit);
-          if (config.marginValue !== undefined) setMarginValue(config.marginValue);
-          if (config.marginUnit !== undefined) setMarginUnit(config.marginUnit);
-          if (config.useFlexibleLayout !== undefined) setUseFlexibleLayout(config.useFlexibleLayout);
-          if (config.cellsPerRowString !== undefined) setCellsPerRowString(config.cellsPerRowString);
-          if (config.rows !== undefined) setRows(config.rows);
-          if (config.cols !== undefined) setCols(config.cols);
-          if (config.sheetCount !== undefined) setSheetCount(config.sheetCount);
-          if (config.cellWidthValue !== undefined) setCellWidthValue(config.cellWidthValue);
-          if (config.cellHeightValue !== undefined) setCellHeightValue(config.cellHeightValue);
-          if (config.cellUnit !== undefined) setCellUnit(config.cellUnit);
-          if (config.gapValue !== undefined) setGapValue(config.gapValue);
-          if (config.gapUnit !== undefined) setGapUnit(config.gapUnit);
-          if (config.cellPaddingValue !== undefined) setCellPaddingValue(config.cellPaddingValue);
-          if (config.cellPaddingUnit !== undefined) setCellPaddingUnit(config.cellPaddingUnit);
-          if (config.showBorders !== undefined) setShowBorders(config.showBorders);
-          if (config.borderStyle !== undefined) setBorderStyle(config.borderStyle);
-          if (config.borderWidthMm !== undefined) setBorderWidthMm(config.borderWidthMm);
-          if (config.borderRadiusMm !== undefined) setBorderRadiusMm(config.borderRadiusMm);
-          if (config.showRulers !== undefined) setShowRulers(config.showRulers);
-          if (config.showGuidesInExport !== undefined) setShowGuidesInExport(config.showGuidesInExport);
-          if (config.guides !== undefined) setGuides(config.guides);
-        } catch (e) {
-          console.error("Error al importar configuración:", e);
-          alert("Error al importar la configuración. Verifica que el archivo sea válido.");
-        }
-      };
-      reader.readAsText(file);
-    };
-    input.click();
-  }, []);
 
   const layout = useMemo((): SheetLayout => {
     const customW = toMm(customPageWidth, customPageUnit);
@@ -1405,14 +1135,23 @@ export function PhotoGridEditor() {
       if (!start) return;
       const cellIdx = selectedCellIndex;
       if (cellIdx === null) return;
-      const cellEl = document.querySelector(`[data-cell-index="${cellIdx}"]`);
+      const cellEl = document.querySelector(`[data-cell-index="${cellIdx}"]`) as HTMLElement | null;
       if (!cellEl) return;
       didPanRef.current = true;
-      const rect = (cellEl as HTMLElement).getBoundingClientRect();
+      const rect = cellEl.getBoundingClientRect();
       const cellW = rect.width;
       const cellH = rect.height;
-      const deltaX = (e.clientX - start.x) / cellW;
-      const deltaY = (e.clientY - start.y) / cellH;
+      const isRotated = cellEl.getAttribute("data-cell-rotated") === "true";
+      let deltaX: number;
+      let deltaY: number;
+      if (isRotated) {
+        // Celda rotada -90°: el eje X lógico apunta arriba en pantalla, el Y lógico a la derecha
+        deltaX = -(e.clientY - start.y) / cellW;
+        deltaY = (e.clientX - start.x) / cellH;
+      } else {
+        deltaX = (e.clientX - start.x) / cellW;
+        deltaY = (e.clientY - start.y) / cellH;
+      }
       const newPanX = Math.max(-1, Math.min(1, start.panX + deltaX));
       const newPanY = Math.max(-1, Math.min(1, start.panY + deltaY));
       updatePhotoEdit(cellIdx, { panX: newPanX, panY: newPanY });
@@ -1634,6 +1373,7 @@ export function PhotoGridEditor() {
       <div
         key={index}
         data-cell-index={index}
+        data-cell-rotated={cellRotated ? "true" : undefined}
         className={cn(
           "relative bg-muted/50 flex items-center justify-center",
           selectedCellIndex === index && "z-10",
@@ -1845,24 +1585,6 @@ export function PhotoGridEditor() {
                     <p className="text-sm text-muted-foreground mt-1">
                       Configura el tamaño de hoja, grid, celdas y opciones de exportación.
                     </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      className="flex h-9 w-9 items-center justify-center rounded-md hover:bg-muted transition-colors"
-                      title="Guardar configuración (JSON)"
-                      onClick={exportConfig}
-                    >
-                      <Save className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      className="flex h-9 w-9 items-center justify-center rounded-md hover:bg-muted transition-colors"
-                      title="Cargar configuración (JSON)"
-                      onClick={importConfig}
-                    >
-                      <Upload className="h-4 w-4" />
-                    </button>
                   </div>
                 </div>
               </CardHeader>

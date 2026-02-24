@@ -65,6 +65,59 @@ export function saveTemplate(template: CardTemplate): void {
   saveTemplates(next);
 }
 
+/** Devuelve solo las plantillas creadas por el usuario (sin las builtin). */
+export function getUserTemplates(): CardTemplate[] {
+  return getAllTemplates().filter((t) => !t.id.startsWith("builtin:"));
+}
+
+/** Exporta las plantillas de usuario a JSON legible. */
+export function exportUserTemplates(): string {
+  const userTemplates = getUserTemplates();
+  return JSON.stringify(userTemplates, null, 2);
+}
+
+/**
+ * Importa plantillas de usuario desde un JSON (array de CardTemplate).
+ * Devuelve cuántas se importaron / se omitieron.
+ */
+export function importUserTemplates(json: string): { imported: number; skipped: number } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error("El archivo de plantillas no es un JSON válido.");
+  }
+
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  const existing = getUserTemplates();
+  const existingIds = new Set(existing.map((t) => t.id));
+
+  const imported: CardTemplate[] = [];
+  let skipped = 0;
+
+  for (const item of list) {
+    if (!isCardTemplate(item) || !isValidTemplate(item)) {
+      skipped++;
+      continue;
+    }
+    let id = item.id;
+    if (!id || existingIds.has(id)) {
+      id = `imported:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    existingIds.add(id);
+    imported.push({
+      ...item,
+      id,
+    });
+  }
+
+  if (imported.length > 0) {
+    saveTemplates([...existing, ...imported]);
+  }
+
+  return { imported: imported.length, skipped };
+}
+
 export function deleteTemplate(id: string): void {
   if (id.startsWith("builtin:")) return;
   const all = getAllTemplates().filter((t) => t.id !== id);

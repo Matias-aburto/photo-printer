@@ -12,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { AlertTriangle, Plus, Trash2, Copy, Layout } from "lucide-react";
+import { AlertTriangle, Download, Upload, Plus, Trash2, Copy, Layout } from "lucide-react";
 import type { CardTemplate, PlaceholderRect, TemplateBorder, TemplateBorderStyle } from "@/types/card-template";
 import { normalizePlaceholder } from "@/types/card-template";
 import { toMm, fromMm, type LengthUnit, UNIT_LABELS } from "@/lib/units";
@@ -23,6 +23,8 @@ import {
   saveTemplate,
   deleteTemplate,
   createNewTemplate,
+  exportUserTemplates,
+  importUserTemplates,
 } from "@/lib/card-templates";
 
 interface GridMakerPanelProps {
@@ -73,6 +75,46 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
   const refreshTemplates = useCallback(() => {
     setTemplates(getAllTemplates());
   }, []);
+
+  const handleExportTemplates = useCallback(() => {
+    try {
+      const json = exportUserTemplates();
+      const blob = new Blob([json], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `photo-printer-templates-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Error al exportar plantillas:", e);
+      window.alert("No se pudieron exportar las plantillas.");
+    }
+  }, []);
+
+  const handleImportTemplates = useCallback(() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "application/json,.json";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const { imported, skipped } = importUserTemplates(text);
+        refreshTemplates();
+        let msg = `Se importaron ${imported} plantilla(s).`;
+        if (skipped > 0) msg += ` ${skipped} elemento(s) se omitieron por formato inválido.`;
+        window.alert(msg);
+      } catch (e) {
+        console.error("Error al importar plantillas:", e);
+        window.alert("No se pudieron importar las plantillas. ¿Es un archivo exportado desde la app?");
+      }
+    };
+    input.click();
+  }, [refreshTemplates]);
 
   useEffect(() => {
     refreshTemplates();
@@ -180,14 +222,35 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
 
   return (
     <Card className="flex-1 border-0 shadow-none">
-      <CardHeader>
-        <CardTitle className="text-xl flex items-center gap-2">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3 gap-2">
+        <CardTitle className="text-xl flex items-center gap-2 shrink-0">
           <Layout className="h-5 w-5" />
           Grid Maker
         </CardTitle>
-        <p className="text-sm text-muted-foreground">
-          Diseña la plantilla de una celda (marco + zona de foto). Esa celda se repetirá en la hoja según el tamaño que elijas.
-        </p>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            className="h-7 px-2 text-xs"
+            onClick={handleImportTemplates}
+            title="Importar plantillas desde archivo"
+          >
+            <Upload className="w-3 h-3 mr-1" />
+            Importar
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="xs"
+            className="h-7 px-2 text-xs"
+            onClick={handleExportTemplates}
+            title="Exportar plantillas a archivo"
+          >
+            <Download className="w-3 h-3 mr-1" />
+            Exportar
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Lista de plantillas y usar */}
