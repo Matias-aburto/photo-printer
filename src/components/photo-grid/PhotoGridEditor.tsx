@@ -2,11 +2,7 @@
 
 import React, { useCallback, useMemo, useState } from "react";
 import { cn, formatDisplayNum } from "@/lib/utils";
-import {
-  DEFAULT_GRID_APPEARANCE,
-  type GridAppearance,
-  type GridBorderStyle,
-} from "@/types/grid-appearance";
+import { DEFAULT_GRID_APPEARANCE, type GridAppearance } from "@/types/grid-appearance";
 import {
   PAGE_PRESETS,
   getDefaultLayout,
@@ -48,7 +44,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AlertTriangle, Download, HelpCircle, ImagePlus, Layout, Loader2, Pencil, RotateCcw, RotateCw, Trash2, Ruler, X, Settings } from "lucide-react";
+import { AlertTriangle, Download, HelpCircle, ImagePlus, Layout, Loader2, Pencil, RotateCcw, RotateCw, Trash2, Ruler, X, Settings, Maximize2 } from "lucide-react";
 import { exportGridToPdf } from "@/lib/export-pdf";
 
 const UNITS: LengthUnit[] = ["mm", "cm", "in"];
@@ -114,30 +110,7 @@ export function PhotoGridEditor() {
   const [cellUnit, setCellUnit] = useState<LengthUnit>("in");
   const [gapValue, setGapValue] = useState(2);
   const [gapUnit, setGapUnit] = useState<LengthUnit>("mm");
-  const [cellPaddingValue, setCellPaddingValue] = useState(0);
-  const [cellPaddingUnit, setCellPaddingUnit] = useState<LengthUnit>("mm");
-
-  const [showBorders, setShowBorders] = useState(DEFAULT_GRID_APPEARANCE.showBorders);
-  const [borderStyle, setBorderStyle] = useState<GridBorderStyle>(
-    DEFAULT_GRID_APPEARANCE.borderStyle
-  );
-  const [borderWidthMm, setBorderWidthMm] = useState(
-    DEFAULT_GRID_APPEARANCE.borderWidthMm
-  );
-  const [borderRadiusMm, setBorderRadiusMm] = useState(
-    DEFAULT_GRID_APPEARANCE.borderRadiusMm
-  );
-
-  const gridAppearance: GridAppearance = useMemo(
-    () => ({
-      showBorders,
-      borderStyle,
-      borderWidthMm,
-      borderRadiusMm,
-      cellPaddingMm: toMm(cellPaddingValue, cellPaddingUnit),
-    }),
-    [showBorders, borderStyle, borderWidthMm, borderRadiusMm, cellPaddingValue, cellPaddingUnit]
-  );
+  const gridAppearance: GridAppearance = DEFAULT_GRID_APPEARANCE;
 
   const [cells, setCells] = useState<GridCells>(() =>
     createEmptyCells(defaultLayout.rows * defaultLayout.cols)
@@ -148,6 +121,7 @@ export function PhotoGridEditor() {
   const [dropTarget, setDropTarget] = useState<number | null>(null);
   const [exporting, setExporting] = useState(false);
   const [selectedCellIndex, setSelectedCellIndex] = useState<number | null>(null);
+  const [fullscreenIndex, setFullscreenIndex] = useState<number | null>(null);
   const [panning, setPanning] = useState<boolean>(false);
   const panStartRef = React.useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
   const didPanRef = React.useRef<boolean>(false);
@@ -1085,6 +1059,52 @@ export function PhotoGridEditor() {
     [cells]
   );
 
+  // Cerrar el modo pantalla completa si se elimina la foto de la celda activa
+  React.useEffect(() => {
+    if (fullscreenIndex !== null && !cells[fullscreenIndex]) {
+      setFullscreenIndex(null);
+    }
+  }, [cells, fullscreenIndex]);
+
+  // Navegación por teclado en modo pantalla completa (flechas izquierda/derecha y Escape)
+  React.useEffect(() => {
+    if (fullscreenIndex === null) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setFullscreenIndex(null);
+        return;
+      }
+
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        setFullscreenIndex((current) => {
+          if (current === null) return current;
+          if (!cells.length) return current;
+
+          const direction = e.key === "ArrowRight" ? 1 : -1;
+          let next = current;
+
+          // Buscar la siguiente celda con foto, con wrap-around
+          for (let i = 0; i < cells.length; i++) {
+            next = (next + direction + cells.length) % cells.length;
+            if (cells[next]) {
+              return next;
+            }
+          }
+
+          return current;
+        });
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [fullscreenIndex, cells]);
+
   const handleResizeStart = useCallback(
     (cellIndex: number, e: React.MouseEvent) => {
       e.preventDefault();
@@ -1377,8 +1397,8 @@ export function PhotoGridEditor() {
         className={cn(
           "relative bg-muted/50 flex items-center justify-center",
           selectedCellIndex === index && "z-10",
-          !disableBorders && !showBorders && "border-2 border-dashed overflow-hidden",
-          !disableBorders && showBorders && "overflow-hidden",
+          !disableBorders && !gridAppearance.showBorders && "border-2 border-dashed overflow-hidden",
+          !disableBorders && gridAppearance.showBorders && "overflow-hidden",
           dropTarget === index && "border-primary bg-primary/10",
           draggedIndex === index && "opacity-50"
         )}
@@ -1387,11 +1407,11 @@ export function PhotoGridEditor() {
           minWidth: `${cellWidthMm}mm`,
           height: `${cellHeightMm}mm`,
           minHeight: `${cellHeightMm}mm`,
-          ...(!disableBorders && showBorders
+          ...(!disableBorders && gridAppearance.showBorders
             ? {
-                borderWidth: `${mmToPx(borderWidthMm)}px`,
-                borderStyle: borderStyle === "dotted" ? "dotted" : "solid",
-                borderRadius: `${borderRadiusMm}mm`,
+                borderWidth: `${mmToPx(gridAppearance.borderWidthMm)}px`,
+                borderStyle: gridAppearance.borderStyle === "dotted" ? "dotted" : "solid",
+                borderRadius: `${gridAppearance.borderRadiusMm}mm`,
                 borderColor:
                   dropTarget === index ? "hsl(var(--primary))" : "hsl(var(--border))",
                 boxSizing: "border-box",
@@ -1831,75 +1851,6 @@ export function PhotoGridEditor() {
             </div>
                 </details>
 
-                {/* Bordes y apariencia: solo cuando no hay plantilla (con plantilla los bordes se definen en el Grid Maker) */}
-                {!selectedCardTemplateId && (
-                <details className="group rounded-lg border border-border bg-muted/10">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium text-sm hover:bg-muted/20 [&::-webkit-details-marker]:hidden">
-              <span className="transition group-open:rotate-90">▶</span>
-              Bordes y apariencia
-            </summary>
-            <div className="border-t border-border px-4 py-4 space-y-4">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="show-borders"
-                  checked={showBorders}
-                  onChange={(e) => setShowBorders(e.target.checked)}
-                  className="size-4 rounded border-input"
-                />
-                <Label htmlFor="show-borders" className="cursor-pointer font-medium">
-                  Mostrar bordes del grid
-                </Label>
-              </div>
-              {showBorders && (
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label>Estilo</Label>
-                    <Select
-                      value={borderStyle}
-                      onValueChange={(v) => setBorderStyle(v as GridBorderStyle)}
-                    >
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="solid">Sólido</SelectItem>
-                        <SelectItem value="dotted">Punteado</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Grosor (mm)</Label>
-                    <Input
-                      type="number"
-                      min={0.1}
-                      step={0.1}
-                      value={formatDisplayNum(borderWidthMm)}
-                      onChange={(e) =>
-                        setBorderWidthMm(Math.max(0.1, Number(e.target.value) || 0.1))
-                      }
-                      className="w-full"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Radio esquinas (mm)</Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      step={0.5}
-                      value={formatDisplayNum(borderRadiusMm)}
-                      onChange={(e) =>
-                        setBorderRadiusMm(Math.max(0, Number(e.target.value) || 0))
-                      }
-                      className="w-full"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-                </details>
-                )}
-
                 {/* Reglas y guías (colapsable) */}
                 <details className="group rounded-lg border border-border bg-muted/10">
             <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium text-sm hover:bg-muted/20 [&::-webkit-details-marker]:hidden">
@@ -2182,7 +2133,7 @@ export function PhotoGridEditor() {
             )}
           </CardHeader>
         <CardContent className="flex-1 overflow-auto bg-muted/30 p-4 flex justify-center items-start">
-          <div className="flex flex-col items-center gap-8 relative">
+          <div className="flex flex-col items-center gap-8 relative" style={{ transformOrigin: "top center" }}>
             {Array.from({ length: sheetCount }, (_, sheetIndex) => (
               <div key={sheetIndex} className="flex flex-col items-center gap-1 relative">
                 {sheetCount > 1 && (
@@ -2348,26 +2299,27 @@ export function PhotoGridEditor() {
                           const imgLeftMm = rect.xMm - cardRect.xMm;
                           const imgTopMm = rect.yMm - cardRect.yMm;
                           const isRotated = !!cardRect.rotated;
+                          const outerPx = outerB?.enabled ? mmToPx(outerB.widthMm) : 1;
+                          const innerPx = innerB?.enabled ? mmToPx(innerB.widthMm) : 0;
                           return (
                             <div
                               key={cellInSheet}
                               data-template-card
-                              className="absolute box-border bg-white"
+                              className="absolute bg-white"
                               style={{
                                 left: `${cardRect.xMm}mm`,
                                 top: `${cardRect.yMm}mm`,
                                 width: `${cardRect.widthMm}mm`,
                                 height: `${cardRect.heightMm}mm`,
-                                ...(outerB?.enabled
-                                  ? {
-                                      border: `${mmToPx(outerB.widthMm)}px ${outerB.style === "dashed" ? "dashed" : "solid"} ${borderColor}`,
-                                    }
-                                  : { border: "1px solid hsl(var(--muted-foreground) / 0.4)" }),
+                                boxSizing: "content-box",
+                                boxShadow: outerB?.enabled
+                                  ? `inset 0 0 0 ${outerPx}px ${borderColor}`
+                                  : "inset 0 0 0 1px hsl(var(--muted-foreground) / 0.4)",
                               }}
                             >
                               <div
                                 className={cn(
-                                  "absolute overflow-hidden box-border",
+                                  "absolute overflow-hidden",
                                   isEditingTemplate && "cursor-move"
                                 )}
                                 style={{
@@ -2375,11 +2327,8 @@ export function PhotoGridEditor() {
                                   top: `${imgTopMm}mm`,
                                   width: `${rect.widthMm}mm`,
                                   height: `${rect.heightMm}mm`,
-                                  ...(innerB?.enabled
-                                    ? {
-                                        border: `${mmToPx(innerB.widthMm)}px ${innerB.style === "dashed" ? "dashed" : "solid"} ${borderColor}`,
-                                      }
-                                    : {}),
+                                  boxSizing: "content-box",
+                                  ...(innerPx > 0 ? { boxShadow: `inset 0 0 0 ${innerPx}px ${borderColor}` } : {}),
                                 }}
                                 {...(isEditingTemplate && !isRotated
                                   ? {
@@ -2628,6 +2577,24 @@ export function PhotoGridEditor() {
 
           <div className="h-8 w-px bg-border" />
 
+          {/* Pantalla completa */}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="whitespace-nowrap flex items-center gap-2"
+            onClick={() => {
+              if (selectedCellIndex !== null) {
+                setFullscreenIndex(selectedCellIndex);
+              }
+            }}
+            title="Pantalla completa"
+          >
+            <Maximize2 className="size-4" />
+          </Button>
+
+          <div className="h-8 w-px bg-border" />
+
           {/* Botón de cerrar */}
           <Button
             type="button"
@@ -2640,6 +2607,76 @@ export function PhotoGridEditor() {
           </Button>
         </div>
       )}
+      {/* Overlay de foto en pantalla completa (respeta encuadre de la celda) */}
+      {fullscreenIndex !== null && cells[fullscreenIndex] && (() => {
+        const index = fullscreenIndex;
+        const photo = cells[index]!;
+        const edit = getPhotoEdit(photo);
+        const { widthMm, heightMm } = getCellDimensionsMm(index);
+        const aspectRatio = widthMm > 0 && heightMm > 0 ? widthMm / heightMm : 1;
+
+        return (
+          <div
+            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+            onClick={() => setFullscreenIndex(null)}
+          >
+            <button
+              type="button"
+              className="absolute top-4 right-4 inline-flex items-center justify-center rounded-full bg-black/70 text-white hover:bg-black/90 transition-colors p-2"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFullscreenIndex(null);
+              }}
+              aria-label="Cerrar pantalla completa"
+            >
+              <X className="size-5" />
+            </button>
+            <div
+              className="flex items-center justify-center"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className="relative rounded-lg shadow-2xl overflow-hidden flex items-center justify-center"
+                style={{
+                  maxWidth: "95vw",
+                  maxHeight: "90vh",
+                  width: `min(95vw, calc(90vh * ${aspectRatio}))`,
+                  aspectRatio: `${widthMm} / ${heightMm}`,
+                }}
+              >
+                <div className="absolute inset-0">
+                  <div
+                    className="absolute left-1/2 top-1/2 origin-center"
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      transformOrigin: "center center",
+                      transform: (() => {
+                        const tx = edit.panX * 50;
+                        const ty = edit.panY * 50;
+                        return `translate(-50%, -50%) translate(${tx}%, ${ty}%) rotate(${edit.rotation}deg) scale(${edit.scale})`;
+                      })(),
+                    }}
+                  >
+                    <div className="absolute inset-0">
+                      <img
+                        src={photo.url}
+                        alt={photo.fileName ?? `Foto ${index + 1}`}
+                        className="w-full h-full object-contain pointer-events-none select-none"
+                        draggable={false}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="absolute bottom-6 flex items-center gap-3 px-4 py-2 rounded-full bg-black/60 text-sm text-white/90">
+              <span>Celda {index + 1}</span>
+              <span className="text-xs text-white/70">Usa ← → para cambiar de foto, Esc para salir</span>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

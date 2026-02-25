@@ -1,3 +1,5 @@
+import type { LengthUnit } from "@/lib/units";
+
 /**
  * Plantilla de "card" para el Grid Maker.
  * Define el marco (tamaño de la celda) y uno o más placeholders donde van las fotos.
@@ -143,6 +145,12 @@ export interface CardTemplate {
   outerBorder?: TemplateBorder;
   /** Borde del área de foto (interior). Por defecto desactivado. */
   innerBorder?: TemplateBorder;
+  /** Unidad preferida para ancho/alto del marco en el editor (mm, cm, in). */
+  frameUnit?: LengthUnit;
+  /** Unidad preferida para márgenes/tamaño del placeholder en el editor. */
+  placeholderUnit?: LengthUnit;
+  /** Unidad preferida para el gap entre cards en el editor. */
+  gapUnit?: LengthUnit;
 }
 
 export function isCardTemplate(t: unknown): t is CardTemplate {

@@ -44,9 +44,12 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
   const [templates, setTemplates] = useState<CardTemplate[]>([]);
   const [editing, setEditing] = useState<CardTemplate | null>(null);
   const [frameUnit, setFrameUnit] = useState<LengthUnit>("mm");
+  const [gapUnit, setGapUnit] = useState<LengthUnit>("in");
+  const [placeholderUnit, setPlaceholderUnit] = useState<LengthUnit>("mm");
   // Evitar que el valor formateado mueva el cursor: edición libre y commit al salir
   const [focusedNumberField, setFocusedNumberField] = useState<string | null>(null);
   const [editingNumberValue, setEditingNumberValue] = useState("");
+  const lastRestoredTemplateIdRef = React.useRef<string | null>(null);
 
   const numberInputProps = useCallback(
     (fieldId: string, currentFormatted: string, onCommit: (value: number) => void) => ({
@@ -71,6 +74,14 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
     }),
     [focusedNumberField, editingNumberValue]
   );
+
+  // Cuando cargamos una plantilla en edición, restaurar las unidades preferidas guardadas en ella
+  useEffect(() => {
+    if (!editing) return;
+    setFrameUnit(editing.frameUnit ?? "mm");
+    setGapUnit(editing.gapUnit ?? "in");
+    setPlaceholderUnit(editing.placeholderUnit ?? "mm");
+  }, [editing]);
 
   const refreshTemplates = useCallback(() => {
     setTemplates(getAllTemplates());
@@ -120,17 +131,26 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
     refreshTemplates();
   }, [refreshTemplates]);
 
-  // Restaurar modo edición al reabrir el panel si el padre sigue en modo edición (p. ej. se cerró el panel al hacer click en la vista previa)
+  // Restaurar modo edición al reabrir el panel si el padre sigue en modo edición (p. ej. se cerró el panel al hacer click en la vista previa),
+  // pero sin reabrir inmediatamente después de un "Guardar" local.
   useEffect(() => {
-    if (initialEditingTemplate != null && editing === null) {
-      const normalized: CardTemplate = {
-        ...initialEditingTemplate,
-        placeholders: initialEditingTemplate.placeholders.map((p) =>
-          normalizePlaceholder(p, initialEditingTemplate.widthMm, initialEditingTemplate.heightMm)
-        ),
-      };
-      setEditing(normalized);
+    if (!initialEditingTemplate) {
+      // Cuando el padre sale del modo edición, olvidamos el último id restaurado
+      lastRestoredTemplateIdRef.current = null;
+      return;
     }
+    // Solo restaurar si no estamos ya editando y aún no restauramos esta plantilla concreta
+    if (editing !== null) return;
+    if (lastRestoredTemplateIdRef.current === initialEditingTemplate.id) return;
+
+    const normalized: CardTemplate = {
+      ...initialEditingTemplate,
+      placeholders: initialEditingTemplate.placeholders.map((p) =>
+        normalizePlaceholder(p, initialEditingTemplate.widthMm, initialEditingTemplate.heightMm)
+      ),
+    };
+    setEditing(normalized);
+    lastRestoredTemplateIdRef.current = initialEditingTemplate.id;
   }, [initialEditingTemplate, editing]);
 
   const handleNew = useCallback(() => {
@@ -176,10 +196,15 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
 
   const handleSave = useCallback(() => {
     if (!editing) return;
-    saveTemplate(editing);
+    const toSave = editing;
+    saveTemplate(toSave);
     refreshTemplates();
+    // Asegurar que el padre sale del modo edición (oculta botones Aceptar/Cancelar del header)
+    onEditingTemplateChange?.(null);
+    // Mantener seleccionada la plantilla recién guardada
+    onSelectTemplate(toSave.id);
     setEditing(null);
-  }, [editing, refreshTemplates]);
+  }, [editing, refreshTemplates, onEditingTemplateChange, onSelectTemplate]);
 
   const handleCancelEdit = useCallback(() => {
     setEditing(null);
@@ -231,7 +256,7 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
           <Button
             type="button"
             variant="outline"
-            size="xs"
+            size="sm"
             className="h-7 px-2 text-xs"
             onClick={handleImportTemplates}
             title="Importar plantillas desde archivo"
@@ -242,7 +267,7 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
           <Button
             type="button"
             variant="outline"
-            size="xs"
+            size="sm"
             className="h-7 px-2 text-xs"
             onClick={handleExportTemplates}
             title="Exportar plantillas a archivo"
@@ -358,17 +383,36 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
                     <Label className="text-xs text-muted-foreground">Ancho</Label>
                     <Input
                       className="w-full min-w-0 text-base"
-                      {...numberInputProps("frameW", formatDisplayNum(fromMm(editing.widthMm, frameUnit)), (v) => { updateEditing((t) => ({ ...t, widthMm: toMm(v, frameUnit) })); })}
+                      {...numberInputProps("frameW", formatDisplayNum(fromMm(editing.widthMm, frameUnit)), (v) => {
+                        updateEditing((t) => {
+                          const next = { ...t, widthMm: toMm(v, frameUnit) };
+                          onEditingTemplateChange?.(next);
+                          return next;
+                        });
+                      })}
                     />
                   </div>
                   <div className="space-y-1 min-w-0">
                     <Label className="text-xs text-muted-foreground">Alto</Label>
                     <Input
                       className="w-full min-w-0 text-base"
-                      {...numberInputProps("frameH", formatDisplayNum(fromMm(editing.heightMm, frameUnit)), (v) => { updateEditing((t) => ({ ...t, heightMm: toMm(v, frameUnit) })); })}
+                      {...numberInputProps("frameH", formatDisplayNum(fromMm(editing.heightMm, frameUnit)), (v) => {
+                        updateEditing((t) => {
+                          const next = { ...t, heightMm: toMm(v, frameUnit) };
+                          onEditingTemplateChange?.(next);
+                          return next;
+                        });
+                      })}
                     />
                   </div>
-                  <Select value={frameUnit} onValueChange={(v) => setFrameUnit(v as LengthUnit)}>
+                  <Select
+                    value={frameUnit}
+                    onValueChange={(v) => {
+                      const unit = v as LengthUnit;
+                      setFrameUnit(unit);
+                      updateEditing((t) => ({ ...t, frameUnit: unit }));
+                    }}
+                  >
                     <SelectTrigger className="w-[4.5rem] shrink-0">
                       <SelectValue />
                     </SelectTrigger>
@@ -387,9 +431,33 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
                 <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
                   <Input
                     className="w-full min-w-0 text-base"
-                    {...numberInputProps("gapMm", formatDisplayNum(fromMm(editing.gapMm ?? 2, frameUnit)), (v) => { updateEditing((t) => ({ ...t, gapMm: toMm(v, frameUnit) })); })}
+                    {...numberInputProps("gapMm", formatDisplayNum(fromMm(editing.gapMm ?? 2, gapUnit)), (v) => {
+                      updateEditing((t) => {
+                        const next = { ...t, gapMm: toMm(v, gapUnit) };
+                        onEditingTemplateChange?.(next);
+                        return next;
+                      });
+                    })}
                   />
-                  <span className="text-sm text-muted-foreground pb-2">{frameUnit}</span>
+                  <Select
+                    value={gapUnit}
+                    onValueChange={(v) => {
+                      const unit = v as LengthUnit;
+                      setGapUnit(unit);
+                      updateEditing((t) => ({ ...t, gapUnit: unit }));
+                    }}
+                  >
+                    <SelectTrigger className="w-[4.5rem] shrink-0">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(["mm", "cm", "in"] as const).map((u) => (
+                        <SelectItem key={u} value={u}>
+                          {UNIT_LABELS[u]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <p className="text-xs text-muted-foreground">Distancia entre cards al imprimir en la hoja.</p>
               </div>
@@ -434,38 +502,59 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
             {ph && (
               <>
                 <div className="space-y-3">
-                  <Label className="text-sm">Placeholder (zona de la foto)</Label>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <Label className="text-sm">Placeholder (zona de la foto)</Label>
+                    <Select
+                      value={placeholderUnit}
+                      onValueChange={(v) => {
+                        const unit = v as LengthUnit;
+                        setPlaceholderUnit(unit);
+                        updateEditing((t) => ({ ...t, placeholderUnit: unit }));
+                      }}
+                    >
+                      <SelectTrigger className="w-[4.5rem] h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(["mm", "cm", "in"] as const).map((u) => (
+                          <SelectItem key={u} value={u}>
+                            {UNIT_LABELS[u]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <p className="text-xs text-muted-foreground">Margen desde el borde del marco.</p>
                   <div className="space-y-3">
                     <div>
-                      <Label className="text-xs font-medium text-muted-foreground mb-2 block">Margen ({frameUnit})</Label>
+                      <Label className="text-xs font-medium text-muted-foreground mb-2 block">Margen ({placeholderUnit})</Label>
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1 min-w-0">
                           <Label className="text-xs text-muted-foreground">Top</Label>
                           <Input
                             className="w-full min-w-0 text-base"
-                            {...numberInputProps("marginTop", formatDisplayNum(fromMm(ph.marginTopMm, frameUnit)), (v) => { setPlaceholder(0, { marginTopMm: toMm(v, frameUnit) }); })}
+                            {...numberInputProps("marginTop", formatDisplayNum(fromMm(ph.marginTopMm, placeholderUnit)), (v) => { setPlaceholder(0, { marginTopMm: toMm(v, placeholderUnit) }); })}
                           />
                         </div>
                         <div className="space-y-1 min-w-0">
                           <Label className="text-xs text-muted-foreground">Bottom</Label>
                           <Input
                             className="w-full min-w-0 text-base"
-                            {...numberInputProps("marginBottom", formatDisplayNum(fromMm(ph.marginBottomMm, frameUnit)), (v) => { setPlaceholder(0, { marginBottomMm: toMm(v, frameUnit) }); })}
+                            {...numberInputProps("marginBottom", formatDisplayNum(fromMm(ph.marginBottomMm, placeholderUnit)), (v) => { setPlaceholder(0, { marginBottomMm: toMm(v, placeholderUnit) }); })}
                           />
                         </div>
                         <div className="space-y-1 min-w-0">
                           <Label className="text-xs text-muted-foreground">Left</Label>
                           <Input
                             className="w-full min-w-0 text-base"
-                            {...numberInputProps("marginLeft", formatDisplayNum(fromMm(ph.marginLeftMm, frameUnit)), (v) => { setPlaceholder(0, { marginLeftMm: toMm(v, frameUnit) }); })}
+                            {...numberInputProps("marginLeft", formatDisplayNum(fromMm(ph.marginLeftMm, placeholderUnit)), (v) => { setPlaceholder(0, { marginLeftMm: toMm(v, placeholderUnit) }); })}
                           />
                         </div>
                         <div className="space-y-1 min-w-0">
                           <Label className="text-xs text-muted-foreground">Right</Label>
                           <Input
                             className="w-full min-w-0 text-base"
-                            {...numberInputProps("marginRight", formatDisplayNum(fromMm(ph.marginRightMm, frameUnit)), (v) => { setPlaceholder(0, { marginRightMm: toMm(v, frameUnit) }); })}
+                            {...numberInputProps("marginRight", formatDisplayNum(fromMm(ph.marginRightMm, placeholderUnit)), (v) => { setPlaceholder(0, { marginRightMm: toMm(v, placeholderUnit) }); })}
                           />
                         </div>
                       </div>
@@ -495,15 +584,15 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
                       </div>
                     </div>
                     <div>
-                      <Label className="text-xs font-medium text-muted-foreground mb-2 block">Tamaño del placeholder ({frameUnit})</Label>
+                      <Label className="text-xs font-medium text-muted-foreground mb-2 block">Tamaño del placeholder ({placeholderUnit})</Label>
                       <p className="text-xs text-muted-foreground mb-2">Ancho y alto del área de foto (se ajusta margin Right/Bottom).</p>
                       <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1 min-w-0">
                           <Label className="text-xs text-muted-foreground">Ancho</Label>
                           <Input
                             className="w-full min-w-0 text-base"
-                            {...numberInputProps("placeholderW", formatDisplayNum(fromMm(cardW - ph.marginLeftMm - ph.marginRightMm, frameUnit)), (v) => {
-                              const wMm = toMm(v, frameUnit);
+                            {...numberInputProps("placeholderW", formatDisplayNum(fromMm(cardW - ph.marginLeftMm - ph.marginRightMm, placeholderUnit)), (v) => {
+                              const wMm = toMm(v, placeholderUnit);
                               setPlaceholder(0, { marginRightMm: Math.max(0, cardW - ph.marginLeftMm - wMm) });
                             })}
                           />
@@ -512,8 +601,8 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
                           <Label className="text-xs text-muted-foreground">Alto</Label>
                           <Input
                             className="w-full min-w-0 text-base"
-                            {...numberInputProps("placeholderH", formatDisplayNum(fromMm(cardH - ph.marginTopMm - ph.marginBottomMm, frameUnit)), (v) => {
-                              const hMm = toMm(v, frameUnit);
+                            {...numberInputProps("placeholderH", formatDisplayNum(fromMm(cardH - ph.marginTopMm - ph.marginBottomMm, placeholderUnit)), (v) => {
+                              const hMm = toMm(v, placeholderUnit);
                               setPlaceholder(0, { marginBottomMm: Math.max(0, cardH - ph.marginTopMm - hMm) });
                             })}
                           />

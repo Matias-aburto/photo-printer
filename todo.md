@@ -1,1 +1,0 @@
--  en la vista previa de la hoja a tamaño real hay una sombra en cada card que nunca configuré y no debería estar. 
