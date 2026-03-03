@@ -1,6 +1,6 @@
 {
   "name": "photo-printer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Grid de fotos para imprimir (PDF)",
   "author": "",
   "private": true,
@@ -25,7 +25,8 @@
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "tailwind-merge": "^3.4.1"
+    "tailwind-merge": "^3.4.1",
+    "electron-updater": "^6.8.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
