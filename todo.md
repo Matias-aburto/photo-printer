@@ -1,0 +1,2 @@
+- cambiar icono de la 
+- cancelar no funciona

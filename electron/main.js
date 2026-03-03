@@ -1,4 +1,5 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, dialog } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const http = require("http");
 const fs = require("fs");
@@ -27,6 +28,8 @@ const MIME = {
 
 let mainWindow = null;
 let server = null;
+
+const isDev = !app.isPackaged;
 
 function createStaticServer() {
   return new Promise((resolve) => {
@@ -82,6 +85,50 @@ function createWindow(port) {
   });
 }
 
+function setupAutoUpdate() {
+  if (isDev) return;
+
+  autoUpdater.on("update-available", () => {
+    if (!mainWindow) return;
+    dialog.showMessageBox(mainWindow, {
+      type: "info",
+      title: "Actualización disponible",
+      message:
+        "Se ha encontrado una nueva versión de Photo Printer.\nLa descarga comenzará en segundo plano.",
+      buttons: ["Aceptar"],
+    });
+  });
+
+  autoUpdater.on("update-downloaded", () => {
+    if (!mainWindow) {
+      autoUpdater.quitAndInstall();
+      return;
+    }
+
+    dialog
+      .showMessageBox(mainWindow, {
+        type: "question",
+        title: "Actualización lista",
+        message:
+          "Se ha descargado una nueva versión de Photo Printer.\n¿Quieres reiniciar ahora para completar la actualización?",
+        buttons: ["Reiniciar ahora", "Más tarde"],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then((result) => {
+        if (result.response === 0) {
+          autoUpdater.quitAndInstall();
+        }
+      });
+  });
+
+  autoUpdater.on("error", (error) => {
+    console.error("Error en el auto-updater:", error);
+  });
+
+  autoUpdater.checkForUpdatesAndNotify();
+}
+
 app.whenReady().then(async () => {
   if (!fs.existsSync(OUT_DIR)) {
     console.error("Carpeta 'out' no encontrada. Ejecuta 'npm run build' primero.");
@@ -90,6 +137,7 @@ app.whenReady().then(async () => {
   }
   const port = await createStaticServer();
   createWindow(port);
+  setupAutoUpdate();
 });
 
 app.on("window-all-closed", () => {
