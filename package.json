@@ -48,7 +48,7 @@
     "files": ["out/**/*", "electron/**/*"],
     "extraResources": [{ "from": "out", "to": "out" }],
     "win": {
-      "target": ["nsis", "portable"],
+      "target": ["nsis"],
       "signAndEditExecutable": false,
       "artifactName": "Photo-Printer-Setup-${version}.${ext}"
     }
