@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Outfit } from "next/font/google";
+import { UpdateStatusBar } from "@/components/UpdateStatusBar";
 import "./globals.css";
 
 const outfit = Outfit({
@@ -20,6 +21,7 @@ export default function RootLayout({
   return (
     <html lang="es" suppressHydrationWarning>
       <body className={`${outfit.variable} font-sans antialiased`} suppressHydrationWarning>
+        <UpdateStatusBar />
         {children}
       </body>
     </html>

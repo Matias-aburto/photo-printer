@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require("electron");
+const { app, BrowserWindow, ipcMain } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const path = require("path");
 const http = require("http");
@@ -77,6 +77,7 @@ function createWindow(port) {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
     },
   });
   mainWindow.loadURL(`http://127.0.0.1:${port}/`);
@@ -85,45 +86,55 @@ function createWindow(port) {
   });
 }
 
+function sendStatus(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("update-status", payload);
+  }
+}
+
 function setupAutoUpdate() {
   if (isDev) return;
 
+  ipcMain.handle("request-quit-and-install", () => {
+    autoUpdater.quitAndInstall();
+  });
+
+  autoUpdater.on("checking-for-update", () => {
+    sendStatus({ status: "checking", message: "Buscando actualizaciones..." });
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    sendStatus({ status: "upToDate", message: "La app está actualizada" });
+  });
+
   autoUpdater.on("update-available", () => {
-    if (!mainWindow) return;
-    dialog.showMessageBox(mainWindow, {
-      type: "info",
-      title: "Actualización disponible",
-      message:
-        "Se ha encontrado una nueva versión de Photo Printer.\nLa descarga comenzará en segundo plano.",
-      buttons: ["Aceptar"],
+    sendStatus({
+      status: "available",
+      message: "Nueva versión disponible. Descargando...",
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    sendStatus({
+      status: "downloading",
+      message: `Descargando... ${Math.round(progress.percent)}%`,
+      progress: progress.percent,
     });
   });
 
   autoUpdater.on("update-downloaded", () => {
-    if (!mainWindow) {
-      autoUpdater.quitAndInstall();
-      return;
-    }
-
-    dialog
-      .showMessageBox(mainWindow, {
-        type: "question",
-        title: "Actualización lista",
-        message:
-          "Se ha descargado una nueva versión de Photo Printer.\n¿Quieres reiniciar ahora para completar la actualización?",
-        buttons: ["Reiniciar ahora", "Más tarde"],
-        defaultId: 0,
-        cancelId: 1,
-      })
-      .then((result) => {
-        if (result.response === 0) {
-          autoUpdater.quitAndInstall();
-        }
-      });
+    sendStatus({
+      status: "ready",
+      message: "Actualización lista. Reinicia la app para instalar.",
+    });
   });
 
   autoUpdater.on("error", (error) => {
     console.error("Error en el auto-updater:", error);
+    sendStatus({
+      status: "error",
+      message: error.message || "Error al buscar actualizaciones",
+    });
   });
 
   autoUpdater.checkForUpdatesAndNotify();
