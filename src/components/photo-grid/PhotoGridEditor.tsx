@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useMemo, useState } from "react";
+import pkg from "../../../package.json";
 import { cn, formatDisplayNum } from "@/lib/utils";
 import { DEFAULT_GRID_APPEARANCE, type GridAppearance } from "@/types/grid-appearance";
 import {
@@ -48,6 +49,9 @@ import { AlertTriangle, Download, HelpCircle, ImagePlus, Layout, Loader2, Pencil
 import { exportGridToPdf } from "@/lib/export-pdf";
 
 const UNITS: LengthUnit[] = ["mm", "cm", "in"];
+
+const APP_NAME = "Photo Printer";
+const APP_VERSION = pkg.version ?? "";
 
 /** Factor mm → px para visualización en pantalla (96 DPI). */
 const MM_TO_PX_SCREEN = 96 / 25.4;
@@ -347,72 +351,9 @@ export function PhotoGridEditor() {
     };
   }, [openPanel]);
 
-  // Cerrar panel al hacer click fuera del área del sidebar/panel
+  // Ya no cerramos los paneles al clickear fuera; solo se controlan con el estado explícito.
   React.useEffect(() => {
-    if (!openPanel) return;
-    
-    const handleClickOutside = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      
-      // Ignorar clicks en botones del sidebar (el toggle ya los maneja)
-      const isSidebarButton = target.closest('aside button');
-      if (isSidebarButton) {
-        return;
-      }
-      
-      // Ignorar clicks en elementos del portal de Select/dropdowns
-      const isSelectContent = target.closest('[role="listbox"]') || 
-                              target.closest('[data-radix-popper-content-wrapper]') ||
-                              target.closest('[data-radix-portal]') ||
-                              target.closest('.radix-select-content') ||
-                              target.closest('[id^="radix-"]') ||
-                              target.closest('[data-radix-select-content]') ||
-                              target.closest('[data-radix-select-viewport]') ||
-                              target.closest('[data-radix-select-item]') ||
-                              target.closest('button[aria-haspopup="listbox"]');
-      
-      if (isSelectContent) {
-        // Es un dropdown abierto, mantener el panel abierto
-        isInteractingRef.current = true;
-        if (closePanelTimeoutRef.current) {
-          clearTimeout(closePanelTimeoutRef.current);
-          closePanelTimeoutRef.current = null;
-        }
-        return;
-      }
-      
-      // Verificar si hay un Select abierto antes de cerrar
-      const hasOpenSelect = document.querySelector('[role="listbox"]') ||
-                           document.querySelector('[data-radix-select-content]') ||
-                           document.querySelector('[data-radix-popper-content-wrapper]') ||
-                           document.querySelectorAll('[data-radix-select-trigger][data-state="open"]').length > 0;
-      
-      if (hasOpenSelect) {
-        isInteractingRef.current = true;
-        if (closePanelTimeoutRef.current) {
-          clearTimeout(closePanelTimeoutRef.current);
-          closePanelTimeoutRef.current = null;
-        }
-        return;
-      }
-      
-      const sidebarContainer = target.closest('[data-sidebar-container]');
-      if (!sidebarContainer) {
-        // Click fuera del sidebar/panel, cerrar inmediatamente
-        setOpenPanel(null);
-        isInteractingRef.current = false;
-        if (closePanelTimeoutRef.current) {
-          clearTimeout(closePanelTimeoutRef.current);
-          closePanelTimeoutRef.current = null;
-        }
-      }
-    };
-
-    // Usar click en lugar de mousedown para que se ejecute después del toggle
-    document.addEventListener('click', handleClickOutside, false);
-    return () => {
-      document.removeEventListener('click', handleClickOutside, false);
-    };
+    return;
   }, [openPanel]);
 
   // Limpiar timeout al desmontar
@@ -1555,7 +1496,6 @@ export function PhotoGridEditor() {
       <div
         data-sidebar-container
         className="hidden lg:flex relative"
-        onMouseLeave={handlePanelClose}
       >
         {/* Sidebar de iconos, al estilo Canva */}
         <aside className="flex flex-col w-16 border-r bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 text-foreground">
@@ -1564,9 +1504,9 @@ export function PhotoGridEditor() {
               type="button"
               className={`group flex h-12 w-12 items-center justify-center rounded-lg hover:bg-primary/10 hover:text-primary transition-all duration-200 hover:scale-105 active:scale-95 ${openPanel === 'config' ? 'bg-primary/10 text-primary' : ''}`}
               title="Configuración del grid"
-              onMouseEnter={() => {
-                // Siempre abrir el panel al hacer hover, cerrando el anterior si existe
-                handlePanelOpen('config');
+              onClick={() => {
+                // Toggle explícito por click
+                setOpenPanel((prev) => (prev === 'config' ? null : 'config'));
               }}
             >
               <Settings className="h-5 w-5 transition-transform group-hover:scale-110" />
@@ -1575,7 +1515,9 @@ export function PhotoGridEditor() {
               type="button"
               className={`group flex h-12 w-12 items-center justify-center rounded-lg hover:bg-primary/10 hover:text-primary transition-all duration-200 hover:scale-105 active:scale-95 ${openPanel === 'library' ? 'bg-primary/10 text-primary' : ''}`}
               title="Uploads / Biblioteca de fotos"
-              onMouseEnter={() => handlePanelOpen('library')}
+              onClick={() => {
+                setOpenPanel((prev) => (prev === 'library' ? null : 'library'));
+              }}
             >
               <ImagePlus className="h-5 w-5 transition-transform group-hover:scale-110" />
             </button>
@@ -1583,9 +1525,32 @@ export function PhotoGridEditor() {
               type="button"
               className={`group flex h-12 w-12 items-center justify-center rounded-lg hover:bg-primary/10 hover:text-primary transition-all duration-200 hover:scale-105 active:scale-95 ${openPanel === 'gridmaker' ? 'bg-primary/10 text-primary' : ''}`}
               title="Grid Maker — diseñar plantilla de celda"
-              onMouseEnter={() => handlePanelOpen('gridmaker')}
+              onClick={() => {
+                setOpenPanel((prev) => (prev === 'gridmaker' ? null : 'gridmaker'));
+              }}
             >
               <Layout className="h-5 w-5 transition-transform group-hover:scale-110" />
+            </button>
+          </div>
+
+          {/* Logo + nombre/versión de la app */}
+          <div className="pb-4 flex items-center justify-center">
+            <button
+              type="button"
+              className="group flex flex-col items-center gap-1"
+              title={`${APP_NAME} v${APP_VERSION}`}
+            >
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border/70 bg-background shadow-sm group-hover:border-primary/60 group-hover:shadow-md transition-colors">
+                <img
+                  src="/icon.svg"
+                  alt={APP_NAME}
+                  className="h-5 w-5"
+                  draggable={false}
+                />
+              </div>
+              <span className="text-[9px] text-muted-foreground group-hover:text-foreground leading-none">
+                v{APP_VERSION}
+              </span>
             </button>
           </div>
         </aside>
@@ -1595,18 +1560,23 @@ export function PhotoGridEditor() {
           <div
             className="absolute left-16 top-0 bottom-0 w-96 border-r bg-background shadow-2xl z-20 flex flex-col animate-in slide-in-from-left-2 duration-200 overflow-y-auto"
             onMouseEnter={handlePanelCancelClose}
-            onMouseLeave={handlePanelClose}
           >
             <Card className="flex-1 border-0 shadow-none">
-              <CardHeader>
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
-                    <CardTitle className="text-xl">Configuración del grid</CardTitle>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Configura el tamaño de hoja, grid, celdas y opciones de exportación.
-                    </p>
-                  </div>
+              <CardHeader className="flex flex-row items-start justify-between gap-2">
+                <div className="flex-1">
+                  <CardTitle className="text-xl">Configuración del grid</CardTitle>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Configura el tamaño de hoja, grid, celdas y opciones de exportación.
+                  </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setOpenPanel(null)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  aria-label="Cerrar panel de configuración"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </CardHeader>
               <CardContent 
                 className="space-y-6"
@@ -1935,10 +1905,20 @@ export function PhotoGridEditor() {
         {/* Panel flotante de biblioteca */}
         {openPanel === "gridmaker" && (
           <div
+            data-sidebar-container
             className="absolute left-16 top-0 bottom-0 w-96 border-r bg-background shadow-2xl z-20 flex flex-col animate-in slide-in-from-left-2 duration-200 overflow-y-auto"
-            onMouseEnter={handlePanelCancelClose}
-            onMouseLeave={handlePanelClose}
           >
+            <div className="flex items-center justify-between px-4 pt-3 pb-1 border-b bg-background/80">
+              <span className="text-sm font-medium text-muted-foreground">Grid Maker</span>
+              <button
+                type="button"
+                onClick={() => setOpenPanel(null)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                aria-label="Cerrar Grid Maker"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
             <GridMakerPanel
               selectedTemplateId={selectedCardTemplateId}
               onSelectTemplate={setSelectedCardTemplateId}
@@ -1959,20 +1939,23 @@ export function PhotoGridEditor() {
           <div
             className="absolute left-16 top-0 bottom-0 w-72 border-r bg-background shadow-2xl z-20 flex flex-col animate-in slide-in-from-left-2 duration-200"
             onMouseEnter={handlePanelCancelClose}
-            onMouseLeave={(e) => {
-              // No cerrar si hay un drag activo desde la biblioteca
-              if (isLibraryDragActiveRef.current) {
-                return;
-              }
-              handlePanelClose();
-            }}
           >
             <Card className="flex-1 border-0 shadow-none">
-              <CardHeader>
-                <CardTitle className="text-lg">Biblioteca de fotos</CardTitle>
-                <p className="text-sm text-muted-foreground">
-                  Arrastra aquí muchas fotos o haz clic para cargarlas, y luego arrástralas a las celdas del grid.
-                </p>
+              <CardHeader className="flex flex-row items-start justify-between gap-2">
+                <div className="flex-1">
+                  <CardTitle className="text-lg">Biblioteca de fotos</CardTitle>
+                  <p className="text-sm text-muted-foreground">
+                    Arrastra aquí muchas fotos o haz clic para cargarlas, y luego arrástralas a las celdas del grid.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOpenPanel(null)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  aria-label="Cerrar biblioteca"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </CardHeader>
               <CardContent 
                 className="space-y-3"

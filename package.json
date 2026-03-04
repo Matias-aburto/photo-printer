@@ -44,13 +44,15 @@
   "build": {
     "appId": "com.photo-printer.app",
     "productName": "Photo Printer",
+    "icon": "public/icon-512.png",
     "directories": { "output": "dist" },
     "files": ["out/**/*", "electron/**/*"],
     "extraResources": [{ "from": "out", "to": "out" }],
     "win": {
       "target": ["nsis"],
       "signAndEditExecutable": false,
-      "artifactName": "Photo-Printer-Setup-${version}.${ext}"
+      "artifactName": "Photo-Printer-Setup-${version}.${ext}",
+      "icon": "public/icon-512.png"
     },
     "publish": [
       {

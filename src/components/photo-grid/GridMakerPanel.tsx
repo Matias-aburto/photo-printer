@@ -207,8 +207,11 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
   }, [editing, refreshTemplates, onEditingTemplateChange, onSelectTemplate]);
 
   const handleCancelEdit = useCallback(() => {
+    // Salir del modo edición tanto localmente como en el padre,
+    // para que no se restaure automáticamente la plantilla en edición.
     setEditing(null);
-  }, []);
+    onEditingTemplateChange?.(null);
+  }, [onEditingTemplateChange]);
 
   const updateEditing = useCallback((updater: (t: CardTemplate) => CardTemplate) => {
     setEditing((prev) => (prev ? updater(prev) : null));

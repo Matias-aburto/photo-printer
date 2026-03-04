@@ -74,6 +74,8 @@ function createWindow(port) {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    // Icono de la ventana (usa el PNG generado desde Next/public)
+    icon: path.join(OUT_DIR, "icon-512.png"),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
