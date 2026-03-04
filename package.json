@@ -49,7 +49,8 @@
     "extraResources": [{ "from": "out", "to": "out" }],
     "win": {
       "target": ["nsis", "portable"],
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "artifactName": "Photo-Printer-Setup-${version}.${ext}"
     }
   }
 }
