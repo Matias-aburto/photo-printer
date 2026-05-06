@@ -12,20 +12,123 @@ import { packCellsOnPage } from "./sheet-layout";
 const EPSILON_MM = 1e-6;
 
 const STORAGE_KEY = "photo-printer-card-templates";
+/** Copia de respaldo en la misma sesión por si el almacenamiento principal queda vacío o corrupto. */
+const SESSION_BACKUP_KEY = `${STORAGE_KEY}-session-backup`;
+
+function canUseDomStorage(): boolean {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+}
+
+function defaultPlaceholderForCard(cardWidthMm: number, cardHeightMm: number) {
+  const m = 5;
+  return normalizePlaceholder(
+    {
+      marginTopMm: m,
+      marginBottomMm: m,
+      marginLeftMm: m,
+      marginRightMm: m,
+      paddingTopMm: 0,
+      paddingBottomMm: 0,
+      paddingLeftMm: 0,
+      paddingRightMm: 0,
+    },
+    cardWidthMm,
+    cardHeightMm
+  );
+}
+
+/** Repara plantillas guardadas (p. ej. placeholders vacíos tras un bug o export incompleto) para no perderlas al cargar. */
+function repairStoredTemplate(t: unknown): CardTemplate | null {
+  if (!isCardTemplate(t)) return null;
+  const w = typeof t.widthMm === "number" && Number.isFinite(t.widthMm) ? t.widthMm : 50;
+  const h = typeof t.heightMm === "number" && Number.isFinite(t.heightMm) ? t.heightMm : 50;
+  let placeholders = t.placeholders;
+  if (!Array.isArray(placeholders) || placeholders.length === 0) {
+    placeholders = [defaultPlaceholderForCard(w, h)];
+  } else {
+    placeholders = placeholders.map((p) => normalizePlaceholder(p, w, h));
+  }
+  return {
+    ...t,
+    widthMm: w,
+    heightMm: h,
+    placeholders,
+  };
+}
+
+function dedupeTemplatesById(templates: CardTemplate[]): CardTemplate[] {
+  const map = new Map<string, CardTemplate>();
+  for (const t of templates) {
+    if (t.id) map.set(t.id, t);
+  }
+  return Array.from(map.values());
+}
+
+function readStoredTemplateListRaw(): unknown[] {
+  if (typeof window === "undefined") return [];
+
+  // Electron: archivo en userData (no depende del origen http ni de localStorage).
+  if (window.electronAPI?.readCardTemplatesSync) {
+    let fileJson: string;
+    try {
+      fileJson = window.electronAPI.readCardTemplatesSync();
+    } catch {
+      fileJson = "";
+    }
+    if (typeof fileJson === "string" && fileJson.trim()) {
+      try {
+        const parsed = JSON.parse(fileJson);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    // Migración: si había datos solo en localStorage (versiones anteriores), copiar al archivo una vez.
+    if (canUseDomStorage()) {
+      const legacy = localStorage.getItem(STORAGE_KEY);
+      if (legacy?.trim()) {
+        try {
+          window.electronAPI.writeCardTemplatesSync(legacy);
+          const parsed = JSON.parse(legacy);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch {
+          return [];
+        }
+      }
+    }
+    return [];
+  }
+
+  if (!canUseDomStorage()) return [];
+  let raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw && typeof window.sessionStorage !== "undefined") {
+    raw = sessionStorage.getItem(SESSION_BACKUP_KEY);
+    if (raw) {
+      try {
+        localStorage.setItem(STORAGE_KEY, raw);
+      } catch {
+        // Cuota u origen restringido: seguimos con lo que hay en sessionStorage
+      }
+    }
+  }
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function loadSavedUserTemplates(): CardTemplate[] {
+  const list = readStoredTemplateListRaw();
+  const repaired = list.map(repairStoredTemplate).filter((t): t is CardTemplate => t !== null);
+  return dedupeTemplatesById(repaired);
+}
 
 /** Devuelve todas las plantillas (guardadas + incluidas). Las guardadas tienen id que no empieza por "builtin:". */
 export function getAllTemplates(): CardTemplate[] {
-  const raw = typeof localStorage !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
-  let saved: CardTemplate[] = [];
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw);
-      const list = Array.isArray(parsed) ? parsed : [];
-      saved = list.filter((t): t is CardTemplate => isCardTemplate(t) && isValidTemplate(t));
-    } catch {
-      saved = [];
-    }
-  }
+  const saved = loadSavedUserTemplates();
   const builtIn = getBuiltInTemplates();
   const savedIds = new Set(saved.map((t) => t.id));
   const builtInFiltered = builtIn.filter((t) => !savedIds.has(t.id));
@@ -47,21 +150,59 @@ export function getTemplateById(id: string): CardTemplate | undefined {
 
 export function saveTemplates(templates: CardTemplate[]): void {
   const builtInIds = new Set(getBuiltInTemplates().map((t) => t.id));
-  const toSave = templates.filter((t) => !builtInIds.has(t.id));
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+  const toSave = dedupeTemplatesById(templates.filter((t) => !builtInIds.has(t.id)));
+  const json = JSON.stringify(toSave);
+
+  if (typeof window !== "undefined" && window.electronAPI?.writeCardTemplatesSync) {
+    try {
+      const ok = window.electronAPI.writeCardTemplatesSync(json);
+      if (!ok) console.error("writeCardTemplatesSync devolvió false");
+    } catch (e) {
+      console.error("No se pudieron guardar las plantillas (archivo Electron):", e);
+    }
+    try {
+      if (canUseDomStorage()) {
+        localStorage.setItem(STORAGE_KEY, json);
+        if (typeof window.sessionStorage !== "undefined") {
+          sessionStorage.setItem(SESSION_BACKUP_KEY, json);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+
+  if (!canUseDomStorage()) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, json);
+    try {
+      if (typeof window.sessionStorage !== "undefined") {
+        sessionStorage.setItem(SESSION_BACKUP_KEY, json);
+      }
+    } catch {
+      // sessionStorage lleno o deshabilitado
+    }
+  } catch (e) {
+    console.error("No se pudieron guardar las plantillas en localStorage:", e);
+  }
 }
 
 export function saveTemplate(template: CardTemplate): void {
+  const w = template.widthMm;
+  const h = template.heightMm;
+  const phSrc =
+    Array.isArray(template.placeholders) && template.placeholders.length > 0
+      ? template.placeholders
+      : [defaultPlaceholderForCard(w, h)];
   const normalized: CardTemplate = {
     ...template,
-    placeholders: template.placeholders.map((p) =>
-      normalizePlaceholder(p, template.widthMm, template.heightMm)
-    ),
+    placeholders: phSrc.map((p) => normalizePlaceholder(p, w, h)),
   };
-  const all = getAllTemplates();
-  const idx = all.findIndex((t) => t.id === template.id);
-  const next = idx >= 0 ? [...all] : [...all, normalized];
-  if (idx >= 0) next[idx] = normalized;
+  const userOnly = getUserTemplates();
+  const idx = userOnly.findIndex((t) => t.id === normalized.id);
+  const next =
+    idx >= 0 ? userOnly.map((t, i) => (i === idx ? normalized : t)) : [...userOnly, normalized];
   saveTemplates(next);
 }
 
@@ -96,17 +237,18 @@ export function importUserTemplates(json: string): { imported: number; skipped: 
   let skipped = 0;
 
   for (const item of list) {
-    if (!isCardTemplate(item) || !isValidTemplate(item)) {
+    const repaired = repairStoredTemplate(item);
+    if (!repaired || !isValidTemplate(repaired)) {
       skipped++;
       continue;
     }
-    let id = item.id;
+    let id = repaired.id;
     if (!id || existingIds.has(id)) {
       id = `imported:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     }
     existingIds.add(id);
     imported.push({
-      ...item,
+      ...repaired,
       id,
     });
   }
@@ -120,8 +262,8 @@ export function importUserTemplates(json: string): { imported: number; skipped: 
 
 export function deleteTemplate(id: string): void {
   if (id.startsWith("builtin:")) return;
-  const all = getAllTemplates().filter((t) => t.id !== id);
-  saveTemplates(all);
+  const next = getUserTemplates().filter((t) => t.id !== id);
+  saveTemplates(next);
 }
 
 /**

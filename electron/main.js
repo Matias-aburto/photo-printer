@@ -9,6 +9,8 @@ const OUT_DIR = app.isPackaged
   ? path.join(process.resourcesPath, "out")
   : path.join(__dirname, "..", "out");
 
+const TEMPLATES_FILE = "card-templates.json";
+
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript",
@@ -80,6 +82,9 @@ function createWindow(port) {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
+      // El servidor estático usa un puerto distinto en cada arranque (listen(0)); sin esto,
+      // cada URL sería un origen nuevo y localStorage (p. ej. plantillas Grid Maker) no persistiría.
+      partition: "persist:photo-printer",
     },
   });
   mainWindow.loadURL(`http://127.0.0.1:${port}/`);
@@ -92,6 +97,37 @@ function sendStatus(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send("update-status", payload);
   }
+}
+
+/** Persistencia de plantillas Grid Maker en disco (userData), independiente del puerto/origen de la página. */
+function registerCardTemplatesIpc() {
+  ipcMain.on("card-templates:read-sync", (event) => {
+    try {
+      const filePath = path.join(app.getPath("userData"), TEMPLATES_FILE);
+      if (!fs.existsSync(filePath)) {
+        event.returnValue = "";
+        return;
+      }
+      event.returnValue = fs.readFileSync(filePath, "utf8");
+    } catch (e) {
+      console.error("card-templates read:", e);
+      event.returnValue = "";
+    }
+  });
+  ipcMain.on("card-templates:write-sync", (event, json) => {
+    try {
+      if (typeof json !== "string") {
+        event.returnValue = false;
+        return;
+      }
+      const filePath = path.join(app.getPath("userData"), TEMPLATES_FILE);
+      fs.writeFileSync(filePath, json, "utf8");
+      event.returnValue = true;
+    } catch (e) {
+      console.error("card-templates write:", e);
+      event.returnValue = false;
+    }
+  });
 }
 
 function setupAutoUpdate() {
@@ -143,6 +179,7 @@ function setupAutoUpdate() {
 }
 
 app.whenReady().then(async () => {
+  registerCardTemplatesIpc();
   if (!fs.existsSync(OUT_DIR)) {
     console.error("Carpeta 'out' no encontrada. Ejecuta 'npm run build' primero.");
     app.quit();

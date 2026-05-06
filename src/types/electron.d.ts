@@ -11,6 +11,8 @@ declare global {
     electronAPI?: {
       onUpdateStatus: (callback: (payload: UpdateStatusPayload) => void) => void;
       requestQuitAndInstall: () => Promise<void>;
+      readCardTemplatesSync: () => string;
+      writeCardTemplatesSync: (json: string) => boolean;
     };
   }
 }
