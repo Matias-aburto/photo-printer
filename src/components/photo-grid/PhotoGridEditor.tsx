@@ -45,7 +45,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AlertTriangle, Download, HelpCircle, ImagePlus, Layout, Loader2, Pencil, RotateCcw, RotateCw, Trash2, Ruler, X, Settings, Maximize2 } from "lucide-react";
+import { AlertTriangle, Copy, Download, HelpCircle, ImagePlus, Layout, Loader2, Pencil, RotateCcw, RotateCw, Trash2, Ruler, X, Settings, Maximize2 } from "lucide-react";
 import { exportGridToPdf } from "@/lib/export-pdf";
 
 const UNITS: LengthUnit[] = ["mm", "cm", "in"];
@@ -956,6 +956,83 @@ export function PhotoGridEditor() {
     },
     []
   );
+
+  /** Copia la foto con la misma URL y ajustes (escala, rotación, pan) para otra celda. */
+  const cloneCellPhotoWithEdits = useCallback((photo: CellPhoto): CellPhoto => {
+    const e = getPhotoEdit(photo);
+    return {
+      url: photo.url,
+      ...(photo.fileName != null && { fileName: photo.fileName }),
+      ...(photo.photoId != null && { photoId: photo.photoId }),
+      scale: e.scale,
+      rotation: e.rotation,
+      panX: e.panX,
+      panY: e.panY,
+    };
+  }, []);
+
+  /** Duplica la foto de la celda en edición a la siguiente celda vacía (orden del grid); si la hoja está llena, añade otra hoja. */
+  const duplicatePhotoToNextSlot = useCallback(() => {
+    if (selectedCellIndex === null) return;
+    const srcIdx = selectedCellIndex;
+    const source = cells[srcIdx];
+    if (!source) return;
+
+    const len = cells.length;
+    if (len === 0) return;
+
+    let targetIdx = -1;
+    for (let step = 1; step <= len; step++) {
+      const idx = (srcIdx + step) % len;
+      if (cells[idx] === null) {
+        targetIdx = idx;
+        break;
+      }
+    }
+
+    const currentSlots = sheetCount * cellsPerSheet;
+    const gridWasFull =
+      len === currentSlots && len > 0 && cells.every((c) => c !== null);
+    const destIdx = targetIdx >= 0 ? targetIdx : len;
+
+    setImageDimensions((prev) => {
+      const next = { ...prev };
+      delete next[destIdx];
+      const d = prev[srcIdx];
+      if (d) next[destIdx] = { ...d };
+      return next;
+    });
+
+    setCells((prev) => {
+      const live = prev[srcIdx];
+      if (!live) return prev;
+      const cloneNow = cloneCellPhotoWithEdits(live);
+      const n = prev.length;
+      if (n === 0) return prev;
+      for (let step = 1; step <= n; step++) {
+        const idx = (srcIdx + step) % n;
+        if (prev[idx] === null) {
+          const next = [...prev];
+          next[idx] = cloneNow;
+          return next;
+        }
+      }
+      const next = [...prev];
+      for (let i = 0; i < cellsPerSheet; i++) next.push(null);
+      next[n] = cloneNow;
+      return next;
+    });
+
+    if (gridWasFull) {
+      setSheetCount((s) => s + 1);
+    }
+  }, [
+    selectedCellIndex,
+    cells,
+    sheetCount,
+    cellsPerSheet,
+    cloneCellPhotoWithEdits,
+  ]);
 
   // Funciones helper para aplicar valores de escala y rotación al presionar Enter
   const applyScaleValue = useCallback((cellIndex: number) => {
@@ -2557,6 +2634,23 @@ export function PhotoGridEditor() {
               </div>
             </div>
           </div>
+
+          <div className="h-8 w-px bg-border" />
+
+          {/* Duplicar a la siguiente celda */}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="whitespace-nowrap flex items-center gap-2"
+            onClick={(e) => {
+              e.stopPropagation();
+              duplicatePhotoToNextSlot();
+            }}
+            title="Duplicar esta foto en la siguiente celda vacía (misma edición). Si la hoja está llena, se añade otra hoja."
+          >
+            <Copy className="size-4" />
+          </Button>
 
           <div className="h-8 w-px bg-border" />
 
