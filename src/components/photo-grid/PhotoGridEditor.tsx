@@ -366,6 +366,9 @@ export function PhotoGridEditor() {
   }, []);
 
   const [draggingGuide, setDraggingGuide] = useState<{ id: string; orientation: GuideOrientation } | null>(null);
+  /** Posición en vivo al arrastrar; evita persistir en cada mousemove. */
+  const [guideDragLive, setGuideDragLive] = useState<{ id: string; positionMm: number } | null>(null);
+  const guideDragLiveRef = React.useRef<{ id: string; positionMm: number } | null>(null);
 
   const layout = useMemo((): SheetLayout => {
     const customW = toMm(customPageWidth, customPageUnit);
@@ -1340,10 +1343,11 @@ export function PhotoGridEditor() {
         orientation === "horizontal" ? layout.pageHeightMm - marginMm : layout.pageWidthMm - marginMm
       ));
       
-      // Crear una guía temporal que se actualizará al arrastrar
-      const tempGuideId = `temp-guide-${Date.now()}-${Math.random()}`;
       const newGuideId = addGuide(orientation, positionMm);
       setDraggingGuide({ id: newGuideId, orientation });
+      const live = { id: newGuideId, positionMm };
+      guideDragLiveRef.current = live;
+      setGuideDragLive(live);
     },
     [layout, addGuide]
   );
@@ -1351,22 +1355,26 @@ export function PhotoGridEditor() {
   const handleGuideMouseDown = useCallback((e: React.MouseEvent, guideId: string, orientation: GuideOrientation) => {
     e.preventDefault();
     e.stopPropagation();
+    const guide = guides.find((g) => g.id === guideId);
     setDraggingGuide({ id: guideId, orientation });
-  }, []);
+    if (guide) {
+      const live = { id: guideId, positionMm: guide.positionMm };
+      guideDragLiveRef.current = live;
+      setGuideDragLive(live);
+    }
+  }, [guides]);
 
-  React.useEffect(() => {
-    if (!draggingGuide) return;
-
-    const onMove = (e: MouseEvent) => {
-      // Usar el elemento bajo el cursor para soportar vista normal y pantalla completa
+  const computeGuidePositionFromMouse = useCallback(
+    (e: MouseEvent, orientation: GuideOrientation): number | null => {
       const underCursor = document.elementFromPoint(e.clientX, e.clientY);
-      const pageEl = underCursor?.closest?.('[data-page-preview]') ?? document.querySelector('[data-page-preview]');
-      if (!pageEl) return;
+      const pageEl =
+        underCursor?.closest?.("[data-page-preview]") ??
+        document.querySelector("[data-page-preview]");
+      if (!pageEl) return null;
 
       const rect = (pageEl as HTMLElement).getBoundingClientRect();
       let positionMm: number;
-
-      if (draggingGuide.orientation === "horizontal") {
+      if (orientation === "horizontal") {
         const y = e.clientY - rect.top;
         positionMm = (y / rect.height) * layout.pageHeightMm;
       } else {
@@ -1374,23 +1382,39 @@ export function PhotoGridEditor() {
         positionMm = (x / rect.width) * layout.pageWidthMm;
       }
 
-      // Limitar dentro de los márgenes
       const marginMm = layout.marginMm;
-      positionMm = Math.max(marginMm, Math.min(
-        positionMm,
-        draggingGuide.orientation === "horizontal"
-          ? layout.pageHeightMm - marginMm
-          : layout.pageWidthMm - marginMm
-      ));
+      return Math.max(
+        marginMm,
+        Math.min(
+          positionMm,
+          orientation === "horizontal"
+            ? layout.pageHeightMm - marginMm
+            : layout.pageWidthMm - marginMm
+        )
+      );
+    },
+    [layout]
+  );
 
-      updateGuidePosition(draggingGuide.id, positionMm);
+  React.useEffect(() => {
+    if (!draggingGuide) return;
+
+    const onMove = (e: MouseEvent) => {
+      const positionMm = computeGuidePositionFromMouse(e, draggingGuide.orientation);
+      if (positionMm == null) return;
+      const live = { id: draggingGuide.id, positionMm };
+      guideDragLiveRef.current = live;
+      setGuideDragLive(live);
     };
 
     const onUp = () => {
+      const live = guideDragLiveRef.current;
+      if (live) updateGuidePosition(live.id, live.positionMm);
+      guideDragLiveRef.current = null;
+      setGuideDragLive(null);
       setDraggingGuide(null);
     };
 
-    // Usar capture phase para asegurar que se capture el evento
     window.addEventListener("mousemove", onMove, true);
     window.addEventListener("mouseup", onUp, true);
 
@@ -1398,7 +1422,7 @@ export function PhotoGridEditor() {
       window.removeEventListener("mousemove", onMove, true);
       window.removeEventListener("mouseup", onUp, true);
     };
-  }, [draggingGuide, layout, updateGuidePosition]);
+  }, [draggingGuide, computeGuidePositionFromMouse, updateGuidePosition]);
 
   const exportPdf = async () => {
     setExporting(true);
@@ -1603,7 +1627,7 @@ export function PhotoGridEditor() {
       {/* Contenedor del sidebar + panel flotante */}
       <div
         data-sidebar-container
-        className="hidden lg:flex relative"
+        className="hidden lg:flex relative z-40"
       >
         {/* Sidebar de iconos, al estilo Canva */}
         <aside className="flex flex-col w-16 border-r bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 text-foreground">
@@ -1666,7 +1690,7 @@ export function PhotoGridEditor() {
         {/* Panel flotante de configuración */}
         {openPanel === 'config' && (
           <div
-            className="absolute left-16 top-0 bottom-0 w-96 border-r bg-background shadow-2xl z-20 flex flex-col animate-in slide-in-from-left-2 duration-200 overflow-y-auto"
+            className="absolute left-16 top-0 bottom-0 w-96 border-r bg-background shadow-2xl z-50 flex flex-col animate-in slide-in-from-left-2 duration-200 overflow-y-auto"
             onMouseEnter={handlePanelCancelClose}
           >
             <Card className="flex-1 border-0 shadow-none">
@@ -1971,7 +1995,7 @@ export function PhotoGridEditor() {
         {openPanel === "gridmaker" && (
           <div
             data-sidebar-container
-            className="absolute left-16 top-0 bottom-0 w-96 border-r bg-background shadow-2xl z-20 flex flex-col animate-in slide-in-from-left-2 duration-200 overflow-y-auto"
+            className="absolute left-16 top-0 bottom-0 w-96 border-r bg-background shadow-2xl z-50 flex flex-col animate-in slide-in-from-left-2 duration-200 overflow-y-auto"
           >
             <div className="flex items-center justify-between px-4 pt-3 pb-1 border-b bg-background/80">
               <span className="text-sm font-medium text-muted-foreground">Grid Maker</span>
@@ -2002,7 +2026,7 @@ export function PhotoGridEditor() {
         )}
         {openPanel === 'library' && (
           <div
-            className="absolute left-16 top-0 bottom-0 w-72 border-r bg-background shadow-2xl z-20 flex flex-col animate-in slide-in-from-left-2 duration-200"
+            className="absolute left-16 top-0 bottom-0 w-72 border-r bg-background shadow-2xl z-50 flex flex-col animate-in slide-in-from-left-2 duration-200"
             onMouseEnter={handlePanelCancelClose}
           >
             <Card className="flex-1 border-0 shadow-none">
@@ -2129,8 +2153,8 @@ export function PhotoGridEditor() {
         )}
       </div>
 
-      {/* Contenido principal (solo preview) */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Contenido principal (solo preview); z-0 para que sidebar/paneles queden por encima al solapar scroll */}
+      <div className="relative z-0 flex-1 flex flex-col overflow-hidden">
         {/* Preview a tamaño real: hoja en mm */}
         <Card className="flex-1 flex flex-col overflow-hidden m-0 rounded-none border-0">
           <CardHeader className="shrink-0 border-b flex flex-row items-center justify-between gap-4">
@@ -2252,7 +2276,7 @@ export function PhotoGridEditor() {
                       </div>
                       {/* Área arrastrable para crear guías horizontales */}
                       <div
-                        className="absolute -top-8 left-0 right-0 h-8 cursor-crosshair z-20 hover:bg-blue-100/20 transition-colors"
+                        className="absolute -top-8 left-0 right-0 h-8 cursor-crosshair z-[1] hover:bg-blue-100/20 transition-colors"
                         style={{ width: `${layout.pageWidthMm}mm` }}
                         onMouseDown={(e) => {
                           e.stopPropagation();
@@ -2262,7 +2286,7 @@ export function PhotoGridEditor() {
                       />
                       {/* Área arrastrable para crear guías verticales */}
                       <div
-                        className="absolute top-0 -left-8 w-8 cursor-crosshair z-20 hover:bg-blue-100/20 transition-colors"
+                        className="absolute top-0 -left-8 w-8 cursor-crosshair z-[1] hover:bg-blue-100/20 transition-colors"
                         style={{ height: `${layout.pageHeightMm}mm` }}
                         onMouseDown={(e) => {
                           e.stopPropagation();
@@ -2275,14 +2299,16 @@ export function PhotoGridEditor() {
                   {/* Guías */}
                   {hasTemplateForGuides && showRulers && guides.map((guide) => {
                     const isHorizontal = guide.orientation === "horizontal";
+                    const positionMm =
+                      guideDragLive?.id === guide.id ? guideDragLive.positionMm : guide.positionMm;
                     return (
                       <div
                         key={guide.id}
-                        className={`absolute z-30 cursor-move group ${
+                        className={`absolute z-[1] cursor-move group ${
                           isHorizontal ? "w-full h-0 border-t border-dashed border-blue-500" : "h-full w-0 border-l border-dashed border-blue-500"
                         }`}
                         style={{
-                          [isHorizontal ? "top" : "left"]: `${(guide.positionMm / (isHorizontal ? layout.pageHeightMm : layout.pageWidthMm)) * 100}%`,
+                          [isHorizontal ? "top" : "left"]: `${(positionMm / (isHorizontal ? layout.pageHeightMm : layout.pageWidthMm)) * 100}%`,
                         }}
                         onMouseDown={(e) => {
                           // No iniciar arrastre si se hace clic en el botón de eliminar
@@ -2304,7 +2330,7 @@ export function PhotoGridEditor() {
                         />
                         {/* Botón de eliminar */}
                         <button
-                          className="guide-delete-btn absolute bg-red-500 hover:bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-40 shadow-sm"
+                          className="guide-delete-btn absolute bg-red-500 hover:bg-red-600 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-[2] shadow-sm"
                           style={{
                             [isHorizontal ? "left" : "top"]: "4px",
                             [isHorizontal ? "top" : "left"]: "-12px",
