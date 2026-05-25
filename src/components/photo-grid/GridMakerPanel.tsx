@@ -40,7 +40,14 @@ interface GridMakerPanelProps {
   sheetLayout?: { pageWidthMm: number; pageHeightMm: number; marginMm: number };
 }
 
-export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditingTemplateChange, onRegisterExitEdit, initialEditingTemplate, sheetLayout }: GridMakerPanelProps) {
+export function GridMakerPanel({
+  onSelectTemplate,
+  selectedTemplateId,
+  onEditingTemplateChange,
+  onRegisterExitEdit,
+  initialEditingTemplate,
+  sheetLayout,
+}: GridMakerPanelProps) {
   const [templates, setTemplates] = useState<CardTemplate[]>([]);
   const [editing, setEditing] = useState<CardTemplate | null>(null);
   const [frameUnit, setFrameUnit] = useState<LengthUnit>("mm");
@@ -194,9 +201,24 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
     if (selectedTemplateId === id) onSelectTemplate(null);
   }, [editing?.id, selectedTemplateId, onSelectTemplate, refreshTemplates]);
 
+  /** La vista previa actualiza reglas/guías en el padre; al guardar usamos esa versión en vivo. */
+  const getTemplateToSave = useCallback((): CardTemplate | null => {
+    if (!editing) return null;
+    if (initialEditingTemplate && initialEditingTemplate.id === editing.id) {
+      return {
+        ...editing,
+        guides: initialEditingTemplate.guides ?? editing.guides,
+        showRulers: initialEditingTemplate.showRulers ?? editing.showRulers,
+        showGuidesInExport:
+          initialEditingTemplate.showGuidesInExport ?? editing.showGuidesInExport,
+      };
+    }
+    return editing;
+  }, [editing, initialEditingTemplate]);
+
   const handleSave = useCallback(() => {
-    if (!editing) return;
-    const toSave = editing;
+    const toSave = getTemplateToSave();
+    if (!toSave) return;
     saveTemplate(toSave);
     refreshTemplates();
     // Asegurar que el padre sale del modo edición (oculta botones Aceptar/Cancelar del header)
@@ -204,7 +226,36 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
     // Mantener seleccionada la plantilla recién guardada
     onSelectTemplate(toSave.id);
     setEditing(null);
-  }, [editing, refreshTemplates, onEditingTemplateChange, onSelectTemplate]);
+  }, [getTemplateToSave, refreshTemplates, onEditingTemplateChange, onSelectTemplate]);
+
+  // Sincronizar guías creadas/arrastradas en la vista previa (estado del padre) al formulario local
+  useEffect(() => {
+    if (!initialEditingTemplate) return;
+    setEditing((prev) => {
+      if (prev === null || prev.id !== initialEditingTemplate.id) return prev;
+      const parentGuides = initialEditingTemplate.guides ?? [];
+      const localGuides = prev.guides ?? [];
+      const guidesMatch =
+        parentGuides.length === localGuides.length &&
+        parentGuides.every(
+          (g, i) =>
+            g.id === localGuides[i]?.id &&
+            g.orientation === localGuides[i]?.orientation &&
+            g.positionMm === localGuides[i]?.positionMm
+        );
+      const rulersMatch =
+        (initialEditingTemplate.showRulers ?? false) === (prev.showRulers ?? false) &&
+        (initialEditingTemplate.showGuidesInExport ?? false) ===
+          (prev.showGuidesInExport ?? false);
+      if (guidesMatch && rulersMatch) return prev;
+      return {
+        ...prev,
+        guides: parentGuides,
+        showRulers: initialEditingTemplate.showRulers ?? prev.showRulers,
+        showGuidesInExport: initialEditingTemplate.showGuidesInExport ?? prev.showGuidesInExport,
+      };
+    });
+  }, [initialEditingTemplate]);
 
   const handleCancelEdit = useCallback(() => {
     // Salir del modo edición tanto localmente como en el padre,
@@ -379,6 +430,66 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
                   placeholder="Nombre de la plantilla"
                 />
               </div>
+
+              <div className="space-y-3 rounded-lg border border-border/60 p-3 bg-background/50">
+                <Label className="text-sm font-medium">Reglas y guías</Label>
+                <p className="text-xs text-muted-foreground">
+                  Propiedades de esta plantilla. Arrastra desde las reglas en la vista previa para crear guías.
+                </p>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="template-show-rulers"
+                    checked={editing.showRulers ?? false}
+                    onChange={(e) => {
+                      updateEditing((t) => ({ ...t, showRulers: e.target.checked }));
+                    }}
+                    className="size-4 rounded border-input"
+                  />
+                  <Label htmlFor="template-show-rulers" className="cursor-pointer text-sm">
+                    Mostrar reglas
+                  </Label>
+                </div>
+                {(editing.showRulers ?? false) && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="template-show-guides-in-export"
+                        checked={editing.showGuidesInExport ?? false}
+                        onChange={(e) => {
+                          updateEditing((t) => ({ ...t, showGuidesInExport: e.target.checked }));
+                        }}
+                        className="size-4 rounded border-input"
+                      />
+                      <Label htmlFor="template-show-guides-in-export" className="cursor-pointer text-sm">
+                        Mostrar guías en el export PDF
+                      </Label>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <p className="text-xs text-muted-foreground font-medium">
+                        Guías activas: {editing.guides?.length ?? 0}
+                      </p>
+                      {(editing.guides?.length ?? 0) > 0 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            updateEditing((t) => ({ ...t, guides: [] }));
+                          }}
+                        >
+                          Quitar todas
+                        </Button>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Eliminar una guía: botón X al pasar el mouse, o clic derecho sobre la guía.
+                    </p>
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-2">
                 <Label className="text-sm">Marco (tamaño de la card)</Label>
                 <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
@@ -387,11 +498,7 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
                     <Input
                       className="w-full min-w-0 text-base"
                       {...numberInputProps("frameW", formatDisplayNum(fromMm(editing.widthMm, frameUnit)), (v) => {
-                        updateEditing((t) => {
-                          const next = { ...t, widthMm: toMm(v, frameUnit) };
-                          onEditingTemplateChange?.(next);
-                          return next;
-                        });
+                        updateEditing((t) => ({ ...t, widthMm: toMm(v, frameUnit) }));
                       })}
                     />
                   </div>
@@ -400,11 +507,7 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
                     <Input
                       className="w-full min-w-0 text-base"
                       {...numberInputProps("frameH", formatDisplayNum(fromMm(editing.heightMm, frameUnit)), (v) => {
-                        updateEditing((t) => {
-                          const next = { ...t, heightMm: toMm(v, frameUnit) };
-                          onEditingTemplateChange?.(next);
-                          return next;
-                        });
+                        updateEditing((t) => ({ ...t, heightMm: toMm(v, frameUnit) }));
                       })}
                     />
                   </div>
@@ -435,11 +538,7 @@ export function GridMakerPanel({ onSelectTemplate, selectedTemplateId, onEditing
                   <Input
                     className="w-full min-w-0 text-base"
                     {...numberInputProps("gapMm", formatDisplayNum(fromMm(editing.gapMm ?? 2, gapUnit)), (v) => {
-                      updateEditing((t) => {
-                        const next = { ...t, gapMm: toMm(v, gapUnit) };
-                        onEditingTemplateChange?.(next);
-                        return next;
-                      });
+                      updateEditing((t) => ({ ...t, gapMm: toMm(v, gapUnit) }));
                     })}
                   />
                   <Select

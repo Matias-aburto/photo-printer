@@ -365,10 +365,6 @@ export function PhotoGridEditor() {
     };
   }, []);
 
-  // Estado para reglas y guías
-  const [showRulers, setShowRulers] = useState(false);
-  const [guides, setGuides] = useState<Guide[]>([]);
-  const [showGuidesInExport, setShowGuidesInExport] = useState(false);
   const [draggingGuide, setDraggingGuide] = useState<{ id: string; orientation: GuideOrientation } | null>(null);
 
   const layout = useMemo((): SheetLayout => {
@@ -410,6 +406,11 @@ export function PhotoGridEditor() {
   // Plantilla de Grid Maker activa: si se está editando una en el panel, la vista previa usa esa versión en vivo
   const cardTemplate = selectedCardTemplateId ? getTemplateById(selectedCardTemplateId) : null;
   const effectiveCardTemplate = editingTemplateFromGridMaker ?? cardTemplate;
+  const showRulers = effectiveCardTemplate?.showRulers ?? false;
+  const showGuidesInExport = effectiveCardTemplate?.showGuidesInExport ?? false;
+  const guides = effectiveCardTemplate?.guides ?? [];
+  const hasTemplateForGuides = effectiveCardTemplate != null;
+
   const templateGapMm = effectiveCardTemplate?.gapMm ?? layout.gapMm;
   const templateCellRects = useMemo((): CellRect[] | null => {
     if (!effectiveCardTemplate) return null;
@@ -1263,25 +1264,55 @@ export function PhotoGridEditor() {
   }, [interactionMode, selectedCellIndex, updatePhotoEdit]);
 
   // Funciones para manejar guías
-  const addGuide = useCallback((orientation: GuideOrientation, positionMm: number): string => {
-    const newGuide: Guide = {
-      id: `guide-${Date.now()}-${Math.random()}`,
-      orientation,
-      positionMm,
-    };
-    setGuides((prev) => [...prev, newGuide]);
-    return newGuide.id;
-  }, []);
+  const addGuide = useCallback(
+    (orientation: GuideOrientation, positionMm: number): string => {
+      const newGuide: Guide = {
+        id: `guide-${Date.now()}-${Math.random()}`,
+        orientation,
+        positionMm,
+      };
+      if (editingTemplateFromGridMaker) {
+        setEditingTemplateFromGridMaker((prev) =>
+          prev ? { ...prev, guides: [...(prev.guides ?? []), newGuide] } : null
+        );
+      } else if (selectedCardTemplateId) {
+        const t = getTemplateById(selectedCardTemplateId);
+        if (t) saveTemplate({ ...t, guides: [...(t.guides ?? []), newGuide] });
+      }
+      return newGuide.id;
+    },
+    [editingTemplateFromGridMaker, selectedCardTemplateId]
+  );
 
-  const removeGuide = useCallback((id: string) => {
-    setGuides((prev) => prev.filter((g) => g.id !== id));
-  }, []);
+  const removeGuide = useCallback(
+    (id: string) => {
+      if (editingTemplateFromGridMaker) {
+        setEditingTemplateFromGridMaker((prev) =>
+          prev ? { ...prev, guides: (prev.guides ?? []).filter((g) => g.id !== id) } : null
+        );
+      } else if (selectedCardTemplateId) {
+        const t = getTemplateById(selectedCardTemplateId);
+        if (t) saveTemplate({ ...t, guides: (t.guides ?? []).filter((g) => g.id !== id) });
+      }
+    },
+    [editingTemplateFromGridMaker, selectedCardTemplateId]
+  );
 
-  const updateGuidePosition = useCallback((id: string, positionMm: number) => {
-    setGuides((prev) =>
-      prev.map((g) => (g.id === id ? { ...g, positionMm } : g))
-    );
-  }, []);
+  const updateGuidePosition = useCallback(
+    (id: string, positionMm: number) => {
+      const mapGuides = (list: Guide[]) =>
+        list.map((g) => (g.id === id ? { ...g, positionMm } : g));
+      if (editingTemplateFromGridMaker) {
+        setEditingTemplateFromGridMaker((prev) =>
+          prev ? { ...prev, guides: mapGuides(prev.guides ?? []) } : null
+        );
+      } else if (selectedCardTemplateId) {
+        const t = getTemplateById(selectedCardTemplateId);
+        if (t) saveTemplate({ ...t, guides: mapGuides(t.guides ?? []) });
+      }
+    },
+    [editingTemplateFromGridMaker, selectedCardTemplateId]
+  );
 
   const handleRulerMouseDown = useCallback(
     (e: React.MouseEvent, orientation: GuideOrientation) => {
@@ -1381,7 +1412,7 @@ export function PhotoGridEditor() {
         cells,
         gridAppearance,
         sheetCount,
-        showGuidesInExport ? guides : [],
+        hasTemplateForGuides && showGuidesInExport ? guides : [],
         customLayout,
         templateCellRects?.length && effectiveCardTemplate ? templateCardRects : null,
         effectiveCardTemplate ?? null
@@ -1898,49 +1929,6 @@ export function PhotoGridEditor() {
             </div>
                 </details>
 
-                {/* Reglas y guías (colapsable) */}
-                <details className="group rounded-lg border border-border bg-muted/10">
-            <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 font-medium text-sm hover:bg-muted/20 [&::-webkit-details-marker]:hidden">
-              <span className="transition group-open:rotate-90">▶</span>
-              Reglas y guías
-            </summary>
-            <div className="border-t border-border px-4 py-4 space-y-4">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="show-rulers"
-                  checked={showRulers}
-                  onChange={(e) => setShowRulers(e.target.checked)}
-                  className="size-4 rounded border-input"
-                />
-                <Label htmlFor="show-rulers" className="cursor-pointer font-medium">
-                  Mostrar reglas
-                </Label>
-              </div>
-              {showRulers && (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      id="show-guides-in-export"
-                      checked={showGuidesInExport}
-                      onChange={(e) => setShowGuidesInExport(e.target.checked)}
-                      className="size-4 rounded border-input"
-                    />
-                    <Label htmlFor="show-guides-in-export" className="cursor-pointer text-sm">
-                      Mostrar guías en el export
-                    </Label>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    <p>Arrastra desde las reglas (áreas grises) para crear guías. Arrastra una guía para moverla.</p>
-                    <p className="mt-1">Eliminar: pasa el mouse sobre una guía y haz clic en el botón X, o clic derecho.</p>
-                    <p className="mt-1 font-medium">Guías activas: {guides.length}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          </details>
-
           {!fitResult.fits && (
             <div
               role="alert"
@@ -2209,8 +2197,8 @@ export function PhotoGridEditor() {
                     minHeight: `${layout.pageHeightMm}mm`,
                   }}
                 >
-                  {/* Reglas */}
-                  {showRulers && (
+                  {/* Reglas (por plantilla Grid Maker) */}
+                  {hasTemplateForGuides && showRulers && (
                     <>
                       {/* Regla horizontal superior */}
                       <div
@@ -2285,7 +2273,7 @@ export function PhotoGridEditor() {
                     </>
                   )}
                   {/* Guías */}
-                  {showRulers && guides.map((guide) => {
+                  {hasTemplateForGuides && showRulers && guides.map((guide) => {
                     const isHorizontal = guide.orientation === "horizontal";
                     return (
                       <div

@@ -432,5 +432,8 @@ export function createNewTemplate(name: string): CardTemplate {
         paddingRightMm: 0,
       },
     ],
+    showRulers: false,
+    showGuidesInExport: false,
+    guides: [],
   };
 }

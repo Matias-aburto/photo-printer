@@ -1,4 +1,5 @@
 import type { LengthUnit } from "@/lib/units";
+import type { Guide } from "@/types/guides";
 
 /**
  * Plantilla de "card" para el Grid Maker.
@@ -151,6 +152,12 @@ export interface CardTemplate {
   placeholderUnit?: LengthUnit;
   /** Unidad preferida para el gap entre cards en el editor. */
   gapUnit?: LengthUnit;
+  /** Mostrar reglas en la vista previa al usar esta plantilla. */
+  showRulers?: boolean;
+  /** Incluir guías en el PDF exportado. */
+  showGuidesInExport?: boolean;
+  /** Guías de alineación guardadas con la plantilla (mm desde borde de hoja). */
+  guides?: Guide[];
 }
 
 export function isCardTemplate(t: unknown): t is CardTemplate {
